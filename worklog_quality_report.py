@@ -74,7 +74,6 @@ Ayşegül Arabacı <aysegul.arabaci@invent.ai>,
 Bahar Şahin <bahar.sahin@invent.ai>,
 Bekir Seçmen <bekir.secmen@invent.ai>,
 Burcu Barın <burcu.barin@invent.ai>,
-Caner Günduz <caner.gunduz@invent.ai>,
 Cansel Memişoğlu <cansel.kaya@invent.ai>,
 Deniz Nil Cengiz <deniz.cengiz@invent.ai>,
 Didem Paloğlu <didem.paloglu@invent.ai>,
@@ -281,6 +280,9 @@ class Jira:
             aid = None
             r = self.s.get(f"{self.base}/rest/api/3/user/search",
                            params={"query": email})
+            if not r.ok:
+                print(f"        [HTTP {r.status_code}] user/search '{email}' "
+                      f"başarısız: {r.text[:120]}", file=sys.stderr)
             users = r.json() if r.ok else []
             # 1) e-posta birebir eşleşiyorsa (görünür ise)
             for u in users:
@@ -489,7 +491,7 @@ def build_slack_blocks(stats: list[PersonStats], today: date,
     return blocks
 
 
-def post_to_slack(blocks: list[dict]):
+def post_to_slack(blocks: list[dict]) -> str | None:
     r = requests.post("https://slack.com/api/chat.postMessage",
                       headers={"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}",
                                "Content-Type": "application/json; charset=utf-8"},
@@ -498,7 +500,113 @@ def post_to_slack(blocks: list[dict]):
     data = r.json()
     if not data.get("ok"):
         raise RuntimeError(f"Slack hatası: {data}")
-    print("[bilgi] Slack'e gönderildi.", file=sys.stderr)
+    print("[bilgi] Tablo Slack'e gönderildi.", file=sys.stderr)
+    return data.get("ts")
+
+
+# --------------------------------------------------------------------------- #
+# Scatter grafiği (doluluk vs gecikme)
+# --------------------------------------------------------------------------- #
+def render_scatter(stats: list[PersonStats], today: date,
+                   wd_elapsed: int, wd_full: int, path: str) -> bool:
+    """Log'u olan kişiler için doluluk-gecikme scatter'ı çizer. PNG kaydeder."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    pts = [p for p in stats if p.n_logs > 0 and p.completeness is not None]
+    if not pts:
+        return False
+
+    def color(p):
+        late, low = p.avg_lag > BAD_DAYS, p.completeness < COMP_YELLOW
+        if late and low:
+            return "#d64545"          # geç + eksik (öncelik)
+        if not late and p.completeness >= COMP_YELLOW:
+            return "#2e9e5b"          # zamanında + yeterli
+        return "#e0a13b"              # karışık
+
+    fig, ax = plt.subplots(figsize=(11.5, 8.2), dpi=140)
+    ax.axvline(BAD_DAYS, color="#999", ls="--", lw=1, zorder=1)
+    ax.axhline(COMP_YELLOW, color="#999", ls="--", lw=1, zorder=1)
+
+    xmax = max(7.0, max(p.avg_lag for p in pts) + 0.5)
+    ax.text(0.15, 98, "zamanında + yeterli", color="#2e9e5b", fontsize=9, style="italic")
+    ax.text(xmax - 0.1, 2, "geç + eksik", color="#d64545", fontsize=9,
+            style="italic", ha="right")
+
+    for p in pts:
+        ax.scatter(p.avg_lag, p.completeness, s=70, color=color(p),
+                   edgecolor="white", linewidth=0.8, zorder=3)
+        ax.annotate(p.name.split()[0], (p.avg_lag, p.completeness),
+                    xytext=(4, 4), textcoords="offset points",
+                    fontsize=7.5, color="#333")
+
+    ax.set_xlim(0, xmax)
+    ax.set_ylim(-4, 104)
+    ax.set_xlabel("Ortalama giriş gecikmesi (gün)  →  kötüleşir", fontsize=11)
+    ax.set_ylabel("Aylık doluluk (%)  →  iyileşir", fontsize=11)
+    ax.set_title(f"Worklog Disiplini — Doluluk vs Giriş Gecikmesi "
+                 f"({today.strftime('%d.%m.%Y')}, {wd_elapsed}/{wd_full} iş günü)",
+                 fontsize=12.5, weight="bold", pad=12)
+    ax.grid(True, alpha=0.25, zorder=0)
+    legend = [
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="#d64545",
+               markersize=9, label="Geç + eksik (öncelik)"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="#e0a13b",
+               markersize=9, label="Karışık"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="#2e9e5b",
+               markersize=9, label="Zamanında + yeterli"),
+    ]
+    ax.legend(handles=legend, loc="lower center", ncol=3, fontsize=9,
+              frameon=True, bbox_to_anchor=(0.5, -0.135))
+    skipped = [p.name for p in stats if p.n_logs == 0]
+    if skipped:
+        fig.text(0.01, 0.005, "Grafik dışı (son 30 günde log yok): "
+                 + ", ".join(skipped), fontsize=7.5, color="#777")
+    fig.tight_layout(rect=[0, 0.02, 1, 1])
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    return True
+
+
+def upload_image_to_slack(path: str, title: str, comment: str,
+                          thread_ts: str | None = None):
+    """Slack'e resim yükler (files.getUploadURLExternal akışı; files:write gerekir)."""
+    token = os.environ["SLACK_BOT_TOKEN"]
+    channel = os.environ["SLACK_CHANNEL"]
+    size = os.path.getsize(path)
+    fname = os.path.basename(path)
+
+    # 1) yükleme URL'si al
+    r = requests.get("https://slack.com/api/files.getUploadURLExternal",
+                     headers={"Authorization": f"Bearer {token}"},
+                     params={"filename": fname, "length": size})
+    d = r.json()
+    if not d.get("ok"):
+        raise RuntimeError(f"Slack upload URL hatası: {d}")
+    upload_url, file_id = d["upload_url"], d["file_id"]
+
+    # 2) dosyayı PUT et
+    with open(path, "rb") as f:
+        up = requests.post(upload_url, files={"file": (fname, f)})
+    if up.status_code != 200:
+        raise RuntimeError(f"Slack dosya yükleme hatası: {up.status_code}")
+
+    # 3) yüklemeyi tamamla (kanala gönder)
+    payload = {"files": [{"id": file_id, "title": title}],
+               "channel_id": channel, "initial_comment": comment}
+    if thread_ts:
+        payload["thread_ts"] = thread_ts
+    r = requests.post("https://slack.com/api/files.completeUploadExternal",
+                      headers={"Authorization": f"Bearer {token}",
+                               "Content-Type": "application/json; charset=utf-8"},
+                      json=payload)
+    d = r.json()
+    if not d.get("ok"):
+        raise RuntimeError(f"Slack completeUpload hatası: {d}")
+    print("[bilgi] Scatter Slack'e gönderildi.", file=sys.stderr)
 
 
 # --------------------------------------------------------------------------- #
@@ -589,10 +697,22 @@ def main():
         return
     blocks = build_slack_blocks(stats, win["today"], win["wd_elapsed"],
                                 win["wd_full"], unresolved)
+    scatter_path = os.path.join(os.getcwd(), "worklog_scatter.png")
+    has_scatter = render_scatter(stats, win["today"], win["wd_elapsed"],
+                                 win["wd_full"], scatter_path)
+
     if "--dry-run" in args:
         print(json.dumps(blocks, ensure_ascii=False, indent=2))
+        if has_scatter:
+            print(f"\n[bilgi] Scatter kaydedildi: {scatter_path}", file=sys.stderr)
     else:
-        post_to_slack(blocks)
+        ts = post_to_slack(blocks)
+        if has_scatter:
+            upload_image_to_slack(
+                scatter_path,
+                title="Doluluk vs Giriş Gecikmesi",
+                comment="Doluluk vs giriş gecikmesi dağılımı",
+                thread_ts=ts)   # tabloyu takip eden thread'e ekle
 
 
 if __name__ == "__main__":
