@@ -28,7 +28,10 @@ günler), `LEAVE_HOURS_BY_ACCOUNT` (kişi bazında izin saati; hedeften düşül
    E-postalar Jira accountId'sine çevrilir; eşleşmeyenler Slack'te ayrı bir
    "⚠️ Jira'da eşleşmeyen" satırında listelenir (sessizce düşmez).
 2. Repo secrets: `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`,
-   `SLACK_BOT_TOKEN` (chat:write), `SLACK_CHANNEL`. Botu kanala ekle.
+   `SLACK_BOT_TOKEN` (chat:write). Hedef kanallar workflow'da sabittir
+   (aşağıya bak); botu **her iki** kanala da ekle. Kanalı elle
+   çalıştırmada değiştirmek için `workflow_dispatch` → `channel` girdisini
+   kullan.
 
 ## Çalıştırma
 ```
@@ -36,7 +39,12 @@ python worklog_quality_report.py --selftest   # hesaplama testi (Jira/Slack gere
 python worklog_quality_report.py --dry-run     # çek+hesapla, Slack'e basmaz
 python worklog_quality_report.py               # canlı
 ```
-Cron: `.github/workflows/worklog-quality.yml` (Pzt–Cum 09:30 TR).
+Cron: `.github/workflows/worklog-quality.yml`. İki zamanlama:
+- **Günlük** (Pzt–Cum 09:30 TR) → `C08DPFWG5PB`
+- **Haftalık** (Cuma 09:30 TR) → `C07L0PF1X6E`
+
+Cuma günü iki cron da tetiklenir; günlük ve haftalık rapor ayrı mesaj
+olarak ilgili kanallara gider.
 
 ## Notlar
 - `worklog.created` sonradan düzenlemede değişmez → gecikmeyi doğru yakalar.
