@@ -22,7 +22,7 @@ Tablo: `Kişi | Dol% | Log/Hedef | OrtGeç | Maks`, en düşük doluluk en üstt
 günler), `LEAVE_HOURS_BY_ACCOUNT` (kişi bazında izin saati; hedeften düşülür).
 
 ## Kurulum
-1. Kapsam: `PEOPLE_RAW` içine "İsim <email>," bloğunu yapıştır (32 kişi hazır
+1. Kapsam: `PEOPLE_RAW` içine "İsim <email>," bloğunu yapıştır (46 kişi hazır
    girildi). Alternatif: `JIRA_GROUP="..."` verirsen grup üyeleri otomatik
    çekilir. Her iki yolda da hiç log girmemiş kişi 0% satırıyla görünür.
    E-postalar Jira accountId'sine çevrilir; eşleşmeyenler Slack'te ayrı bir
