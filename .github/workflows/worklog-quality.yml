@@ -2,10 +2,18 @@ name: Worklog Giriş Disiplini Raporu
 
 on:
   schedule:
-    # Her iş günü 06:30 UTC = 09:30 TR (Pzt–Cum). TR saatini değiştirmek için
-    # cron'u UTC olarak ayarla (TR = UTC+3).
+    # Her iş günü 06:30 UTC = 09:30 TR (Pzt–Cum) -> günlük kanal (C08DPFWG5PB).
+    # TR saatini değiştirmek için cron'u UTC olarak ayarla (TR = UTC+3).
     - cron: "30 6 * * 1-5"
+    # Her Cuma 06:30 UTC = 09:30 TR -> haftalık kanal (C07L0PF1X6E).
+    # (Cuma günü her iki cron da tetiklenir; günlük + haftalık ayrı mesaj gider.)
+    - cron: "30 6 * * 5"
   workflow_dispatch:        # elle tetikleme (test için)
+    inputs:
+      channel:
+        description: "Elle çalıştırmada hedef Slack kanal ID"
+        required: false
+        default: "C08DPFWG5PB"
 
 jobs:
   report:
@@ -20,11 +28,22 @@ jobs:
       - name: Bağımlılıklar
         run: pip install -r requirements.txt
 
+      - name: Hedef Slack kanalını seç
+        id: chan
+        run: |
+          case "${{ github.event.schedule }}" in
+            "30 6 * * 5")    channel="C07L0PF1X6E" ;;  # Cuma -> haftalık
+            "30 6 * * 1-5")  channel="C08DPFWG5PB" ;;  # iş günü -> günlük
+            *)               channel="${{ github.event.inputs.channel }}" ;;  # elle tetikleme
+          esac
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "Hedef kanal: $channel (schedule='${{ github.event.schedule }}')"
+
       - name: Raporu çalıştır ve Slack'e bas
         env:
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+          SLACK_CHANNEL: ${{ steps.chan.outputs.channel }}
         run: python worklog_quality_report.py
