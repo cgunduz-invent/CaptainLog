@@ -2,22 +2,30 @@
 
 İki metriği kişi bazında tek tabloda, her iş günü Slack'e basar.
 
+## Rapor ayı
+Her iki metrik de aynı pencereyi kullanır: ayın `PREV_MONTH_UNTIL_DAY`'ine
+kadar (dahil, varsayılan 3) **bir önceki ay tümüyle**, sonrasında **içinde
+bulunulan ay** (ay başından düne). Böylece ay başında önceki ay kapanmadan
+sıfırlanmaz.
+
 ## Metrikler
-**1) Aylık doluluk (month-to-date)**
-- Hedef = aydaki iş günü × `DAILY_TARGET_HOURS` (8s). Hafta sonu + TR resmi
-  tatilleri (`holidays` paketi) düşülür.
-- Bugüne kadar geçen iş günü baz alınır (ayın 11'iyse 10'una kadar).
-- **Doluluk %** = o ay girilen saat / bugüne kadarki beklenen saat.
+**1) Aylık doluluk**
+- Hedef = rapor ayındaki iş günü × `DAILY_TARGET_HOURS` (8s). Hafta sonu + TR
+  resmi tatilleri (`holidays` paketi) düşülür.
+- İçinde bulunulan ayda bugüne kadar geçen iş günü baz alınır (MTD); önceki
+  ayda ayın tamamı baz alınır.
+- **Doluluk %** = rapor ayında girilen saat / beklenen saat.
 - Renk: 🟢 ≥%90, 🟡 ≥%70, 🔴 <%70.
 
-**2) Giriş gecikmesi (son 30 gün)**
+**2) Giriş gecikmesi (rapor ayı)**
 - Her worklog için `created` (girildiği gün) − `started` (yapıldığı gün).
+- Sadece rapor ayı içinde yapılan (`started`) worklog'lar sayılır.
 - OrtGeç = ortalama gecikme (gün), Maks = en kötü gecikme.
 
 Tablo: `Kişi | Dol% | Log/Hedef | OrtGeç | Maks`, en düşük doluluk en üstte.
 
 ## Ayarlanabilir eşikler (`worklog_quality_report.py` → CONFIG)
-`DAILY_TARGET_HOURS`, `LOOKBACK_DAYS`, `GRACE_DAYS`, `HORIZON_DAYS`,
+`DAILY_TARGET_HOURS`, `PREV_MONTH_UNTIL_DAY`, `GRACE_DAYS`, `HORIZON_DAYS`,
 `BAD_DAYS`, `COMP_GREEN`, `COMP_YELLOW`, `EXTRA_OFF_DAYS` (şirkete özel kapalı
 günler), `LEAVE_HOURS_BY_ACCOUNT` (kişi bazında izin saati; hedeften düşülür).
 
