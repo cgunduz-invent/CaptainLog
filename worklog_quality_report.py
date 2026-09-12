@@ -5,14 +5,20 @@ Worklog Takibi — Aylık Doluluk & Giriş Gecikmesi
 
 İki metriği kişi bazında tek tabloda, her gün Slack'e basar:
 
-1) AYLIK DOLULUK (month-to-date)
-   Hedef = o aydaki iş günü sayısı × günlük hedef saat (8s).
-   Bugüne kadar geçen iş günü baz alınır (ör. ayın 11'iyse 10'una kadar).
-   Doluluk % = o ay girilen toplam saat / bugüne kadarki beklenen saat.
+RAPOR AYI (her iki metrik için ortak pencere)
+   Ayın 3'üne kadar (dahil) BİR ÖNCEKİ ay tümüyle gösterilir.
+   Ayın 3'ünden sonra İÇİNDE BULUNULAN aya odaklanılır (ay başından düne).
+
+1) AYLIK DOLULUK
+   Hedef = rapor ayındaki iş günü sayısı × günlük hedef saat (8s).
+   İçinde bulunulan ayda bugüne kadar geçen iş günü baz alınır (MTD);
+   önceki ayda ayın tamamı baz alınır.
+   Doluluk % = rapor ayında girilen toplam saat / beklenen saat.
    Hafta sonu + Türkiye resmi tatilleri düşülür.
 
-2) GİRİŞ GECİKMESİ (son 30 gün)
+2) GİRİŞ GECİKMESİ (rapor ayı)
    Her worklog için created (girildiği gün) − started (işin yapıldığı gün).
+   Sadece rapor ayı içinde YAPILAN (started) worklog'lar sayılır.
    Fark büyüdükçe disiplin düşer.
 
 Ortam değişkenleri (GitHub Actions secrets):
@@ -49,7 +55,7 @@ import holidays as holidays_lib
 TZ = ZoneInfo("Europe/Istanbul")
 TR_MONTHS = ["", "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
              "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
-LOOKBACK_DAYS = 30            # gecikme metriği penceresi
+PREV_MONTH_UNTIL_DAY = 3      # ayın bu gününe kadar (dahil) önceki ay gösterilir
 DAILY_TARGET_HOURS = 8.0      # doluluk hedefi: iş günü × bu
 
 # Gecikme skorlaması:
@@ -174,13 +180,29 @@ def business_days(start: date, end: date, hol) -> int:
     return n
 
 
+def reporting_month(today: date) -> tuple[int, int]:
+    """Rapor ayı (yıl, ay): ayın PREV_MONTH_UNTIL_DAY'ine kadar (dahil) önceki
+    ay, sonrasında içinde bulunulan ay."""
+    if today.day <= PREV_MONTH_UNTIL_DAY:
+        prev_last = today.replace(day=1) - timedelta(days=1)
+        return prev_last.year, prev_last.month
+    return today.year, today.month
+
+
 def month_bounds(today: date) -> tuple[date, date, date]:
-    """(ay başı, dünkü gün = MTD sınırı, ay sonu)."""
-    month_start = today.replace(day=1)
-    mtd_cutoff = today - timedelta(days=1)          # bugün hariç
-    last = calendar.monthrange(today.year, today.month)[1]
-    month_end = date(today.year, today.month, last)
-    return month_start, mtd_cutoff, month_end
+    """(rapor ayı başı, doluluk sınırı, rapor ayı sonu).
+
+    İçinde bulunulan ayda sınır = dün (MTD); önceki ayda sınır = ay sonu (tam ay).
+    """
+    ry, rm = reporting_month(today)
+    month_start = date(ry, rm, 1)
+    last = calendar.monthrange(ry, rm)[1]
+    month_end = date(ry, rm, last)
+    if (ry, rm) == (today.year, today.month):
+        cutoff = today - timedelta(days=1)          # içinde bulunulan ay: bugün hariç
+    else:
+        cutoff = month_end                          # önceki ay: tümü
+    return month_start, cutoff, month_end
 
 
 # --------------------------------------------------------------------------- #
@@ -190,7 +212,7 @@ def month_bounds(today: date) -> tuple[date, date, date]:
 class PersonStats:
     name: str
     account_id: str = ""
-    # gecikme (son 30g)
+    # gecikme (rapor ayı)
     n_logs: int = 0
     total_seconds: int = 0
     lags: list[int] = field(default_factory=list)
@@ -243,7 +265,7 @@ class PersonStats:
 
 
 def build_stats(worklogs: list[dict], allowed_ids: set[str] | None,
-                lag_since: datetime, mtd_start: date, mtd_end: date,
+                mtd_start: date, mtd_end: date,
                 roster: dict[str, str] | None = None) -> list[PersonStats]:
     people: dict[str, PersonStats] = {}
     # Grup üyelerini önceden koy: log'u olmayan da 0 satırıyla görünsün
@@ -259,11 +281,9 @@ def build_stats(worklogs: list[dict], allowed_ids: set[str] | None,
         seconds = int(w.get("timeSpentSeconds", 0))
         ps = people.setdefault(aid, PersonStats(
             name=author.get("displayName", aid or "?"), account_id=aid))
-        # gecikme metriği: son 30 gün
-        if started >= lag_since:
-            ps.add_lag(lag_days(started, created), seconds)
-        # doluluk metriği: bu ay, düne kadar
+        # Her iki metrik de rapor ayı penceresinde (started içinde) sayılır
         if mtd_start <= started.date() <= mtd_end:
+            ps.add_lag(lag_days(started, created), seconds)
             ps.add_mtd(seconds)
     return list(people.values())
 
@@ -385,7 +405,7 @@ class Jira:
         return out
 
 
-def fetch_worklogs(lag_since: datetime, fetch_since: datetime):
+def fetch_worklogs(fetch_since: datetime):
     base = os.environ["JIRA_BASE_URL"]
     jira = Jira(base, os.environ["JIRA_EMAIL"], os.environ["JIRA_API_TOKEN"])
 
@@ -444,7 +464,8 @@ def comp_flag(c: float | None) -> str:
 
 
 def build_slack_blocks(stats: list[PersonStats], today: date,
-                       wd_elapsed: int, wd_full: int,
+                       wd_elapsed: int, wd_full: int, report_month: int,
+                       is_prev_month: bool = False,
                        unresolved: list[tuple[str, str]] | None = None) -> list[dict]:
     # En düşük dolulukta olan en üstte; eşitlikte gecikmesi yüksek olan
     stats = sorted(stats, key=lambda p: ((p.completeness if p.completeness
@@ -453,11 +474,16 @@ def build_slack_blocks(stats: list[PersonStats], today: date,
     header = {"type": "header", "text": {"type": "plain_text",
               "text": "🕒 Worklog Takibi — Doluluk & Gecikme"}}
     target_to_date = wd_elapsed * DAILY_TARGET_HOURS
+    if is_prev_month:
+        scope = (f"{TR_MONTHS[report_month]} ayı (tamamı): {wd_full} iş günü • "
+                 f"hedef {target_to_date:.0f}s ({DAILY_TARGET_HOURS:.0f}s/gün)")
+    else:
+        scope = (f"{TR_MONTHS[report_month]} ayı (ay başından bugüne): "
+                 f"{wd_elapsed}/{wd_full} iş günü geçti • bugüne dek hedef "
+                 f"{target_to_date:.0f}s ({DAILY_TARGET_HOURS:.0f}s/gün)")
     ctx = {"type": "context", "elements": [{"type": "mrkdwn", "text": (
-        f"*{today.strftime('%d.%m.%Y')}* • {TR_MONTHS[today.month]} ayı: "
-        f"{wd_elapsed}/{wd_full} iş günü geçti • bugüne dek hedef "
-        f"{target_to_date:.0f}s ({DAILY_TARGET_HOURS:.0f}s/gün) • "
-        f"gecikme penceresi son {LOOKBACK_DAYS} gün")}]}
+        f"*{today.strftime('%d.%m.%Y')}* • {scope} • "
+        f"gecikme penceresi: rapor ayı")}]}
 
     h = f"{'Kişi':<18}{'Dol%':>5}{'Log/Hedef':>12}{'OrtGeç':>8}{'Maks':>6}"
     lines = [h, "-" * len(h)]
@@ -577,7 +603,7 @@ def render_scatter(stats: list[PersonStats], today: date,
               frameon=True, bbox_to_anchor=(0.5, -0.135))
     skipped = [p.name for p in stats if p.n_logs == 0]
     if skipped:
-        fig.text(0.01, 0.005, "Grafik dışı (son 30 günde log yok): "
+        fig.text(0.01, 0.005, "Grafik dışı (rapor ayında log yok): "
                  + ", ".join(skipped), fontsize=7.5, color="#777")
     fig.tight_layout(rect=[0, 0.02, 1, 1])
     fig.savefig(path, bbox_inches="tight")
@@ -626,16 +652,17 @@ def upload_image_to_slack(path: str, title: str, comment: str,
 # --------------------------------------------------------------------------- #
 def compute_windows(now: datetime):
     today = now.date()
-    lag_since = now - timedelta(days=LOOKBACK_DAYS)
     month_start, mtd_cutoff, month_end = month_bounds(today)
-    hol = holidays_lib.Turkey(years=[month_start.year, today.year])
+    is_prev_month = (month_start.year, month_start.month) != (today.year, today.month)
+    hol = holidays_lib.Turkey(
+        years=sorted({month_start.year, month_end.year, today.year}))
     wd_elapsed = business_days(month_start, mtd_cutoff, hol)
     wd_full = business_days(month_start, month_end, hol)
-    fetch_since_date = min(lag_since.date(), month_start)
-    fetch_since = datetime.combine(fetch_since_date, datetime.min.time(), TZ)
-    return dict(today=today, lag_since=lag_since, month_start=month_start,
-                mtd_cutoff=mtd_cutoff, wd_elapsed=wd_elapsed, wd_full=wd_full,
-                fetch_since=fetch_since)
+    # Worklog'ları rapor ayı başından çek (hem doluluk hem gecikme aynı pencere)
+    fetch_since = datetime.combine(month_start, datetime.min.time(), TZ)
+    return dict(today=today, month_start=month_start, mtd_cutoff=mtd_cutoff,
+                month_end=month_end, is_prev_month=is_prev_month,
+                wd_elapsed=wd_elapsed, wd_full=wd_full, fetch_since=fetch_since)
 
 
 # --------------------------------------------------------------------------- #
@@ -664,7 +691,7 @@ def _selftest():
         wl("Ece", "e1", "2026-09-02T10:00:00.000+03:00",
            "2026-09-09T18:00:00.000+03:00", 8),   # 7 gün gecikme
     ]
-    stats = build_stats(sample, {"a1", "e1", "z1"}, win["lag_since"],
+    stats = build_stats(sample, {"a1", "e1", "z1"},
                         win["month_start"], win["mtd_cutoff"],
                         roster={"a1": "Ada", "e1": "Ece", "z1": "Boş Kişi"})
     assign_expected(stats, expected_to_date)
@@ -687,9 +714,32 @@ def _selftest():
         print(f"  {n:<5} doluluk {p.completeness:>3.0f}%  "
               f"({p.mtd_hours:.0f}/{p.expected_hours:.0f}s)  "
               f"ort gecikme {p.avg_lag:.1f}g")
-    blocks = build_slack_blocks(stats, win["today"], win["wd_elapsed"], win["wd_full"])
+    blocks = build_slack_blocks(stats, win["today"], win["wd_elapsed"],
+                                win["wd_full"], win["month_start"].month,
+                                win["is_prev_month"])
     assert blocks[0]["type"] == "header"
+    assert win["is_prev_month"] is False
     print(f"  Slack blokları üretildi ({len(blocks)} blok).")
+
+    # --- Ayın 3'üne kadar: önceki ay (tam) gösterilir ---
+    # 2 Ekim'de çalışıldığında rapor ayı = Eylül'ün tamamı (22 iş günü).
+    now2 = datetime(2026, 10, 2, 9, 30, tzinfo=TZ)
+    win2 = compute_windows(now2)
+    assert win2["is_prev_month"] is True
+    assert win2["month_start"] == date(2026, 9, 1), win2["month_start"]
+    assert win2["mtd_cutoff"] == date(2026, 9, 30), win2["mtd_cutoff"]
+    assert win2["wd_elapsed"] == 22 == win2["wd_full"], win2["wd_elapsed"]
+    stats2 = build_stats(sample, {"a1", "e1", "z1"},
+                         win2["month_start"], win2["mtd_cutoff"],
+                         roster={"a1": "Ada", "e1": "Ece", "z1": "Boş Kişi"})
+    assign_expected(stats2, win2["wd_full"] * DAILY_TARGET_HOURS)
+    by2 = {p.name: p for p in stats2}
+    # Eylül tamamı: Ada 64s / 176s hedef, Ece hâlâ 7g gecikme (started Eylül'de)
+    assert by2["Ada"].mtd_hours == 64.0
+    assert abs(by2["Ada"].completeness - 100.0 * 64.0 / 176.0) < 0.01
+    assert by2["Ece"].avg_lag == 7.0
+    print(f"  Önceki ay senaryosu OK (rapor ayı {TR_MONTHS[win2['month_start'].month]}, "
+          f"{win2['wd_full']} iş günü).")
 
 
 def main():
@@ -701,16 +751,16 @@ def main():
         sys.exit("requests kurulu değil: pip install -r requirements.txt")
 
     win = compute_windows(datetime.now(TZ))
-    worklogs, allowed_ids, roster, unresolved = fetch_worklogs(
-        win["lag_since"], win["fetch_since"])
-    stats = build_stats(worklogs, allowed_ids, win["lag_since"],
+    worklogs, allowed_ids, roster, unresolved = fetch_worklogs(win["fetch_since"])
+    stats = build_stats(worklogs, allowed_ids,
                         win["month_start"], win["mtd_cutoff"], roster)
     assign_expected(stats, win["wd_elapsed"] * DAILY_TARGET_HOURS)
     if not stats:
         print("[uyarı] Worklog bulunamadı; mesaj gönderilmiyor.", file=sys.stderr)
         return
     blocks = build_slack_blocks(stats, win["today"], win["wd_elapsed"],
-                                win["wd_full"], unresolved)
+                                win["wd_full"], win["month_start"].month,
+                                win["is_prev_month"], unresolved)
     scatter_path = os.path.join(os.getcwd(), "worklog_scatter.png")
     has_scatter = render_scatter(stats, win["today"], win["wd_elapsed"],
                                  win["wd_full"], scatter_path)
