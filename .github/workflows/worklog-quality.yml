@@ -2,11 +2,10 @@ name: Worklog Giriş Disiplini Raporu
 
 on:
   schedule:
-    # Her iş günü 06:30 UTC = 09:30 TR (Pzt–Cum) -> günlük kanal (C08DPFWG5PB).
+    # Perşembe 06:30 UTC = 09:30 TR -> C08DPFWG5PB.
     # TR saatini değiştirmek için cron'u UTC olarak ayarla (TR = UTC+3).
-    - cron: "30 6 * * 1-5"
-    # Her Cuma 06:30 UTC = 09:30 TR -> haftalık kanal (C07L0PF1X6E).
-    # (Cuma günü her iki cron da tetiklenir; günlük + haftalık ayrı mesaj gider.)
+    - cron: "30 6 * * 4"
+    # Cuma 06:30 UTC = 09:30 TR -> C07L0PF1X6E.
     - cron: "30 6 * * 5"
   workflow_dispatch:        # elle tetikleme (test için)
     inputs:
@@ -32,9 +31,9 @@ jobs:
         id: chan
         run: |
           case "${{ github.event.schedule }}" in
-            "30 6 * * 5")    channel="C07L0PF1X6E" ;;  # Cuma -> haftalık
-            "30 6 * * 1-5")  channel="C08DPFWG5PB" ;;  # iş günü -> günlük
-            *)               channel="${{ github.event.inputs.channel }}" ;;  # elle tetikleme
+            "30 6 * * 4")  channel="C08DPFWG5PB" ;;  # Perşembe
+            "30 6 * * 5")  channel="C07L0PF1X6E" ;;  # Cuma
+            *)             channel="${{ github.event.inputs.channel }}" ;;  # elle tetikleme
           esac
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
           echo "Hedef kanal: $channel (schedule='${{ github.event.schedule }}')"
