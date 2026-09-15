@@ -560,6 +560,8 @@ def render_scatter(stats: list[PersonStats], today: date,
         return False
 
     def color(p):
+        if p.completeness > 100:
+            return "#8e5bd6"          # %100 üstü (hedefin üzerinde giriş)
         late, low = p.avg_lag > BAD_DAYS, p.completeness < COMP_YELLOW
         if late and low:
             return "#d64545"          # geç + eksik (öncelik)
@@ -584,7 +586,8 @@ def render_scatter(stats: list[PersonStats], today: date,
                     fontsize=7.5, color="#333")
 
     ax.set_xlim(0, xmax)
-    ax.set_ylim(-4, 104)
+    ax.set_ylim(-4, 122)
+    ax.axhline(100, color="#bbb", ls=":", lw=1, zorder=1)
     ax.set_xlabel("Ortalama giriş gecikmesi (gün)  →  kötüleşir", fontsize=11)
     ax.set_ylabel("Aylık doluluk (%)  →  iyileşir", fontsize=11)
     ax.set_title(f"Worklog Disiplini — Doluluk vs Giriş Gecikmesi "
@@ -598,8 +601,10 @@ def render_scatter(stats: list[PersonStats], today: date,
                markersize=9, label="Karışık"),
         Line2D([0], [0], marker="o", color="w", markerfacecolor="#2e9e5b",
                markersize=9, label="Zamanında + yeterli"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="#8e5bd6",
+               markersize=9, label="%100 üstü"),
     ]
-    ax.legend(handles=legend, loc="lower center", ncol=3, fontsize=9,
+    ax.legend(handles=legend, loc="lower center", ncol=4, fontsize=9,
               frameon=True, bbox_to_anchor=(0.5, -0.135))
     skipped = [p.name for p in stats if p.n_logs == 0]
     if skipped:
