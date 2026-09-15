@@ -48,11 +48,11 @@ python worklog_quality_report.py --dry-run     # çek+hesapla, Slack'e basmaz
 python worklog_quality_report.py               # canlı
 ```
 Cron: `.github/workflows/worklog-quality.yml`. İki zamanlama:
-- **Günlük** (Pzt–Cum 09:30 TR) → `C08DPFWG5PB`
-- **Haftalık** (Cuma 09:30 TR) → `C07L0PF1X6E`
+- **Perşembe** (09:30 TR) → `C08DPFWG5PB`
+- **Cuma** (09:30 TR) → `C07L0PF1X6E`
 
-Cuma günü iki cron da tetiklenir; günlük ve haftalık rapor ayrı mesaj
-olarak ilgili kanallara gider.
+Not: GitHub Actions cron'u kuyruğa alır; mesaj 09:30 TR yerine birkaç
+dakika–15+ dk gecikmeli düşebilir (saat hesabı doğru, gecikme GitHub kaynaklı).
 
 ## Notlar
 - `worklog.created` sonradan düzenlemede değişmez → gecikmeyi doğru yakalar.
