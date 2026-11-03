@@ -1,0 +1,44 @@
+name: Anlık tablo ("give me updated table")
+
+on:
+  schedule:
+    # Hafta içi 08:00–20:59 TR (05–17 UTC), 10 dakikada bir kanallara bakar.
+    # GitHub cron'u birkaç dakika gecikebilir; cevap genelde 2–15 dk içinde gelir.
+    - cron: "*/10 5-17 * * 1-5"
+  workflow_dispatch:        # elle tetikleme: hemen bak ve cevapla
+
+concurrency:
+  group: on-demand-table    # üst üste binen iki çalışma aynı mesaja iki kez cevap vermesin
+  cancel-in-progress: false
+
+jobs:
+  reply:
+    runs-on: ubuntu-latest
+    env:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      WATCH_CHANNELS: "C08DPFWG5PB,C07L0PF1X6E"
+      LOOKBACK_MINUTES: "120"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: İstek var mı?
+        id: check
+        run: |
+          pip install -q requests
+          python on_demand.py --check
+
+      - name: Bağımlılıklar
+        if: steps.check.outputs.pending == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Güncel tabloyu thread'e yaz
+        if: steps.check.outputs.pending == 'true'
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: python on_demand.py

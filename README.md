@@ -54,6 +54,22 @@ Cron: `.github/workflows/worklog-quality.yml`. İki zamanlama:
 Not: GitHub Actions cron'u kuyruğa alır; mesaj 09:30 TR yerine birkaç
 dakika–15+ dk gecikmeli düşebilir (saat hesabı doğru, gecikme GitHub kaynaklı).
 
+## Anlık tablo: "give me updated table"
+İzlenen kanallardan birine (`C08DPFWG5PB`, `C07L0PF1X6E`) **give me updated
+table** yaz. Bot o anki rakamları Jira'dan taze çekip tabloyu + scatter'ı
+mesajının thread'ine yazar.
+- Workflow: `.github/workflows/on-demand-table.yml`, hafta içi 08:00–20:59 TR
+  arası 10 dakikada bir bakar → cevap genelde 2–15 dk içinde gelir.
+  Beklemek istemezsen Actions → "Anlık tablo" → *Run workflow*.
+- Büyük/küçük harf, noktalama ve bota mention fark etmez. Thread içine
+  yazılan istek görülmez; kanala ana mesaj olarak yaz.
+- Aynı mesaja iki kez cevap vermez (bot o thread'de cevap verdiyse atlar).
+- Bot token'ında ek scope gerekir: `channels:history` (açık kanal) ve
+  `groups:history` (özel kanal). Scope ekledikten sonra uygulamayı yeniden
+  yükle (Reinstall) ve yeni token'ı `SLACK_BOT_TOKEN` secret'ına koy (token
+  değişmezse gerek yok).
+- Test: `python on_demand.py --selftest`
+
 ## Notlar
 - `worklog.created` sonradan düzenlemede değişmez → gecikmeyi doğru yakalar.
 - İzin günü düşülmezse izindeki kişi haksız yere düşük doluluk görünür;
