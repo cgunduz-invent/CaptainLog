@@ -531,12 +531,16 @@ def build_slack_blocks(stats: list[PersonStats], today: date,
     return blocks
 
 
-def post_to_slack(blocks: list[dict]) -> str | None:
+def post_to_slack(blocks: list[dict], channel: str | None = None,
+                  thread_ts: str | None = None) -> str | None:
+    payload = {"channel": channel or os.environ["SLACK_CHANNEL"], "blocks": blocks,
+               "text": "Worklog takip raporu"}
+    if thread_ts:
+        payload["thread_ts"] = thread_ts
     r = requests.post("https://slack.com/api/chat.postMessage",
                       headers={"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}",
                                "Content-Type": "application/json; charset=utf-8"},
-                      json={"channel": os.environ["SLACK_CHANNEL"], "blocks": blocks,
-                            "text": "Worklog takip raporu"})
+                      json=payload)
     data = r.json()
     if not data.get("ok"):
         raise RuntimeError(f"Slack hatası: {data}")
@@ -617,10 +621,10 @@ def render_scatter(stats: list[PersonStats], today: date,
 
 
 def upload_image_to_slack(path: str, title: str, comment: str,
-                          thread_ts: str | None = None):
+                          thread_ts: str | None = None, channel: str | None = None):
     """Slack'e resim yükler (files.getUploadURLExternal akışı; files:write gerekir)."""
     token = os.environ["SLACK_BOT_TOKEN"]
-    channel = os.environ["SLACK_CHANNEL"]
+    channel = channel or os.environ["SLACK_CHANNEL"]
     size = os.path.getsize(path)
     fname = os.path.basename(path)
 
@@ -747,6 +751,29 @@ def _selftest():
           f"{win2['wd_full']} iş günü).")
 
 
+def build_report(now: datetime | None = None):
+    """Jira'dan o anki veriyi çekip tabloyu hesaplar.
+
+    Döner: (slack blokları, scatter png yolu, scatter var mı) ya da veri yoksa None.
+    Hem zamanlanmış rapor hem de "give me updated table" isteği bunu kullanır.
+    """
+    win = compute_windows(now or datetime.now(TZ))
+    worklogs, allowed_ids, roster, unresolved = fetch_worklogs(win["fetch_since"])
+    stats = build_stats(worklogs, allowed_ids,
+                        win["month_start"], win["mtd_cutoff"], roster)
+    assign_expected(stats, win["wd_elapsed"] * DAILY_TARGET_HOURS)
+    if not stats:
+        print("[uyarı] Worklog bulunamadı; mesaj gönderilmiyor.", file=sys.stderr)
+        return None
+    blocks = build_slack_blocks(stats, win["today"], win["wd_elapsed"],
+                                win["wd_full"], win["month_start"].month,
+                                win["is_prev_month"], unresolved)
+    scatter_path = os.path.join(os.getcwd(), "worklog_scatter.png")
+    has_scatter = render_scatter(stats, win["today"], win["wd_elapsed"],
+                                 win["wd_full"], scatter_path)
+    return blocks, scatter_path, has_scatter
+
+
 def main():
     args = sys.argv[1:]
     if "--selftest" in args:
@@ -755,20 +782,10 @@ def main():
     if requests is None:
         sys.exit("requests kurulu değil: pip install -r requirements.txt")
 
-    win = compute_windows(datetime.now(TZ))
-    worklogs, allowed_ids, roster, unresolved = fetch_worklogs(win["fetch_since"])
-    stats = build_stats(worklogs, allowed_ids,
-                        win["month_start"], win["mtd_cutoff"], roster)
-    assign_expected(stats, win["wd_elapsed"] * DAILY_TARGET_HOURS)
-    if not stats:
-        print("[uyarı] Worklog bulunamadı; mesaj gönderilmiyor.", file=sys.stderr)
+    report = build_report()
+    if report is None:
         return
-    blocks = build_slack_blocks(stats, win["today"], win["wd_elapsed"],
-                                win["wd_full"], win["month_start"].month,
-                                win["is_prev_month"], unresolved)
-    scatter_path = os.path.join(os.getcwd(), "worklog_scatter.png")
-    has_scatter = render_scatter(stats, win["today"], win["wd_elapsed"],
-                                 win["wd_full"], scatter_path)
+    blocks, scatter_path, has_scatter = report
 
     if "--dry-run" in args:
         print(json.dumps(blocks, ensure_ascii=False, indent=2))
