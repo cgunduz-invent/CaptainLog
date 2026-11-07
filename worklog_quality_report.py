@@ -121,11 +121,14 @@ Yiğitcan Aksoy <yigitcan.aksoy@invent.ai>,
 Yunus Akça <yunus.akca@invent.ai>
 """
 
-# Müşteri bazında log grafiği: hedefler + Jira proje eşleşmesi bir Google
-# Sheet'ten okunur (CSV olarak). Sütunlar (başlık adları büyük/küçük harf duyarsız):
-#   Müşteri | Jira Projeleri (virgül/; ile ayrılmış, örn. "LP2CS, LCS, LIWA") | Hedef (aylık saat)
-# URL boşsa grafik yine çizilir ama müşteri = proje anahtarı olur, hedef çizgisi olmaz.
-CUSTOMER_TARGETS_URL: str = os.environ.get("CUSTOMER_TARGETS_URL", "")
+# Müşteri bazında log grafiği: hedefler + Jira proje eşleşmesi repo içindeki
+# customer_targets.csv'den okunur (kaynak: "CX Hub Planning 2026_v2.xlsx" →
+# 2026_FTE_Target_v4 sayfası). Sütunlar:
+#   Müşteri | Jira Projeleri (boşluk/virgül ile ayrılmış) | Q1 | Q2 | Q3 | Q4  (aylık FTE)
+# Aylık hedef saat = rapor ayının çeyreğindeki FTE × FTE_MONTHLY_HOURS.
+CUSTOMER_TARGETS_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "customer_targets.csv")
+FTE_MONTHLY_HOURS = 40.0      # 1.0 FTE = ayda 40 saat log
 CUSTOMER_CHART_MAX = 25       # grafikte en çok bu kadar müşteri (en çok log girilenler)
 
 # Şirkete özel ekstra kapalı günler (resmi tatil dışı), ISO tarih:
@@ -329,54 +332,55 @@ def predict_remaining(logged_h: float, wd_elapsed: int, wd_remaining: int) -> fl
     return logged_h / wd_elapsed * wd_remaining
 
 
-def parse_customer_targets(csv_text: str) -> tuple[dict[str, str], dict[str, float]]:
-    """Sheet CSV'si -> (proje -> müşteri, müşteri -> aylık hedef saat)."""
+def parse_customer_targets(csv_text: str, month: int
+                           ) -> tuple[dict[str, str], dict[str, float], list[str]]:
+    """Hedef CSV'si -> (proje -> müşteri, müşteri -> aylık hedef saat,
+    Jira projesi tanımsız müşteriler).
+
+    Sadece Jira projesi tanımlı müşterilerin hedefi grafiğe girer; projesi
+    olmayanın log'u hiç sayılamayacağı için 0 log + hedef göstermek yanıltır.
+    """
     import csv
     import io
     import re
     rows = list(csv.reader(io.StringIO(csv_text)))
     if not rows:
-        return {}, {}
+        return {}, {}, []
     head = [h.strip().lower() for h in rows[0]]
+    q = f"q{(month - 1) // 3 + 1}"
 
     def col(*names):
         for i, h in enumerate(head):
-            if any(n in h for n in names):
+            if h in names:
                 return i
-        raise RuntimeError(f"Hedef sheet'inde sütun bulunamadı: {names} (başlıklar: {rows[0]})")
+        raise RuntimeError(f"Hedef CSV'sinde sütun bulunamadı: {names} (başlıklar: {rows[0]})")
 
-    ci = col("müşteri", "musteri", "customer", "client")
-    pi = col("proje", "project")
-    ti = col("hedef", "target")
-    proj_to_cust, targets = {}, {}
+    ci, pi, ti = col("müşteri", "customer"), col("jira projeleri", "projects"), col(q)
+    proj_to_cust, targets, unmapped = {}, {}, []
     for r in rows[1:]:
         if len(r) <= max(ci, pi, ti) or not r[ci].strip():
             continue
         cust = r[ci].strip()
-        for p in re.split(r"[,;/\s]+", r[pi]):
-            if p.strip():
-                proj_to_cust[p.strip().upper()] = cust
-        t = r[ti].strip().replace(" ", "").replace(",", ".")
+        projects = [p.strip().upper() for p in re.split(r"[,;/\s]+", r[pi]) if p.strip()]
+        for p in projects:
+            proj_to_cust[p] = cust
+        t = r[ti].strip().replace(",", ".")
         try:
-            targets[cust] = float(t)
+            fte = float(t)
         except ValueError:
-            pass                      # hedef boş/yazı -> hedef çizgisi çizilmez
-    return proj_to_cust, targets
+            continue                  # bu çeyrek için hedef yok
+        if not projects:
+            if fte > 0:
+                unmapped.append(cust)
+            continue
+        targets[cust] = fte * FTE_MONTHLY_HOURS
+    return proj_to_cust, targets, unmapped
 
 
-def load_customer_targets(url: str = CUSTOMER_TARGETS_URL
-                          ) -> tuple[dict[str, str], dict[str, float]]:
-    if not url:
-        print("[uyarı] CUSTOMER_TARGETS_URL boş; müşteri = Jira projesi, hedef yok.",
-              file=sys.stderr)
-        return {}, {}
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
-    if "text/html" in r.headers.get("Content-Type", ""):
-        raise RuntimeError("Hedef sheet'i CSV yerine HTML döndü: sheet herkese açık "
-                           "değil ya da URL CSV export linki değil.")
-    r.encoding = "utf-8"
-    return parse_customer_targets(r.text)
+def load_customer_targets(month: int, path: str = CUSTOMER_TARGETS_CSV
+                          ) -> tuple[dict[str, str], dict[str, float], list[str]]:
+    with open(path, encoding="utf-8") as f:
+        return parse_customer_targets(f.read(), month)
 
 
 def assign_expected(stats: list[PersonStats], expected_to_date_h: float):
@@ -717,7 +721,8 @@ def render_scatter(stats: list[PersonStats], today: date,
 # --------------------------------------------------------------------------- #
 def render_customer_chart(cust_hours: dict[str, float], targets: dict[str, float],
                           today: date, wd_elapsed: int, wd_full: int,
-                          report_month: int, path: str) -> bool:
+                          report_month: int, path: str,
+                          unmapped: list[str] | None = None) -> bool:
     """Her satır bir müşteri: log toplamı + kalan günler tahmini (iki bar),
     aynı hizada aylık log hedefi (siyah çizgi). PNG kaydeder."""
     import matplotlib
@@ -773,6 +778,9 @@ def render_customer_chart(cust_hours: dict[str, float], targets: dict[str, float
     ax.legend(handles=legend, loc="upper center", ncol=3, fontsize=8.5,
               frameon=False, bbox_to_anchor=(0.5, -0.07 if len(rows) > 6 else -0.12))
     fig.tight_layout()
+    if unmapped:
+        fig.text(0.01, -0.02, "Jira projesi tanımsız (grafikte yok): " + ", ".join(unmapped),
+                 fontsize=7.5, color="#777", wrap=True)
     fig.savefig(path, bbox_inches="tight")
     plt.close(fig)
     return True
@@ -909,14 +917,20 @@ def _selftest():
           f"{win2['wd_full']} iş günü).")
 
     # --- Müşteri grafiği ---
-    csv_text = ("Müşteri,Jira Projeleri,Hedef (saat)\n"
-                "Liwa,\"LP2CS, LCS; LIWA\",\"120,5\"\n"
-                "Teknosa,TCS,80\n"
-                "Beymen,BCS,\n")                      # hedef boş -> çizgi yok
-    p2c, tg = parse_customer_targets(csv_text)
+    csv_text = ("Müşteri,Jira Projeleri,Q1,Q2,Q3,Q4\n"
+                "Liwa,\"LP2CS, LCS LIWA\",1.0,1.0,\"1,5\",0.5\n"
+                "Teknosa,TCS,1.2,1.2,2.0,1.0\n"
+                "Beymen,BCS,,,,\n"                    # hedef boş -> çizgi yok
+                "CCC,,1.4,1.2,1.2,1.1\n")             # proje yok -> grafikte yok, dipnotta
+    p2c, tg, um = parse_customer_targets(csv_text, 9)  # Eylül = Q3
     assert p2c == {"LP2CS": "Liwa", "LCS": "Liwa", "LIWA": "Liwa",
                    "TCS": "Teknosa", "BCS": "Beymen"}, p2c
-    assert tg == {"Liwa": 120.5, "Teknosa": 80.0}, tg
+    assert tg == {"Liwa": 60.0, "Teknosa": 80.0}, tg   # FTE × 40
+    assert um == ["CCC"], um
+    assert parse_customer_targets(csv_text, 11)[1] == {"Liwa": 20.0, "Teknosa": 40.0}  # Q4
+    # Repo'daki gerçek hedef dosyası okunabiliyor
+    rp2c, rtg, _ = load_customer_targets(11)
+    assert rp2c.get("LP2CS") == "Liwa (MDN)" and rtg.get("Liwa (MDN)") == 20.0, rtg
     cw = [dict(w, _issue_key=k) for w, k in zip(sample, ["LP2CS-1"] * 4 + ["LCS-2"] * 4
                                                  + ["TCS-3", "XYZ-9"])]
     ch = build_customer_hours(cw, {"a1", "e1"}, win["month_start"], win["mtd_cutoff"], p2c)
@@ -927,7 +941,7 @@ def _selftest():
     import tempfile
     png = os.path.join(tempfile.gettempdir(), "selftest_customer_logs.png")
     assert render_customer_chart(ch, tg, win["today"], win["wd_elapsed"], win["wd_full"],
-                                 win["month_start"].month, png)
+                                 win["month_start"].month, png, um)
     print(f"  Müşteri grafiği OK ({png}).")
 
 
@@ -955,17 +969,18 @@ def build_report(now: datetime | None = None):
         images.append((scatter_path, "Doluluk vs Giriş Gecikmesi",
                        "Doluluk vs giriş gecikmesi dağılımı"))
 
-    # Müşteri grafiği: sheet okunamazsa rapor yine gider, sadece uyarı basılır
+    # Müşteri grafiği: hedef dosyası okunamazsa rapor yine gider, sadece uyarı basılır
     try:
-        proj_to_cust, targets = load_customer_targets()
+        proj_to_cust, targets, unmapped = load_customer_targets(win["month_start"].month)
     except Exception as e:                                   # noqa: BLE001
         print(f"[uyarı] Müşteri hedefleri okunamadı: {e}", file=sys.stderr)
-        proj_to_cust, targets = {}, {}
+        proj_to_cust, targets, unmapped = {}, {}, []
     cust_hours = build_customer_hours(worklogs, allowed_ids, win["month_start"],
                                       win["mtd_cutoff"], proj_to_cust)
     cust_path = os.path.join(os.getcwd(), "customer_logs.png")
     if render_customer_chart(cust_hours, targets, win["today"], win["wd_elapsed"],
-                             win["wd_full"], win["month_start"].month, cust_path):
+                             win["wd_full"], win["month_start"].month, cust_path,
+                             unmapped):
         images.append((cust_path, "Müşteri Bazında Log",
                        "Müşteri bazında log toplamı, kalan günler tahmini ve hedef"))
     return blocks, images

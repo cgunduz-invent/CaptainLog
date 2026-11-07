@@ -61,12 +61,15 @@ müşteri, iki yatay bar + hedef çizgisi.
   projelerine girdiği saat (doluluk ile aynı pencere).
 - **Tahmin** (turuncu): kalan iş günlerinde girilmesi beklenen saat =
   log toplamı / geçen iş günü × kalan iş günü. Önceki ay gösterilirken 0.
-- **Hedef** (siyah çizgi): aylık log hedefi.
-- Müşteri ↔ proje eşleşmesi ve hedefler Google Sheet'ten okunur. Sütunlar:
-  `Müşteri | Jira Projeleri | Hedef` (örn. `Liwa | LP2CS, LCS, LIWA | 120`).
-  Sheet'in CSV export linki `CUSTOMER_TARGETS_URL` secret'ına konur. Sheet'te
-  olmayan proje kendi anahtarıyla, hedefsiz görünür. Sheet okunamazsa rapor
-  yine gider, sadece uyarı basılır.
+- **Hedef** (siyah çizgi): aylık log hedefi = rapor ayının çeyreğindeki FTE ×
+  40s (`FTE_MONTHLY_HOURS`; 1.0 FTE = ayda 40 saat).
+- Hedefler ve müşteri ↔ Jira projesi eşleşmesi `customer_targets.csv`'de
+  (kaynak: *CX Hub Planning 2026_v2.xlsx* → `2026_FTE_Target_v4`). Sütunlar:
+  `Müşteri | Jira Projeleri | Q1 | Q2 | Q3 | Q4`. Hedefler değişince bu dosya
+  güncellenir.
+- Dosyada olmayan proje kendi anahtarıyla, hedefsiz satır olur. Jira projesi
+  boş bırakılan müşteri grafiğe girmez, altta "Jira projesi tanımsız"
+  notunda listelenir.
 
 ## Anlık tablo: "give me updated table"
 İzlenen kanallardan birine (`C08DPFWG5PB`, `C07L0PF1X6E`) **give me updated

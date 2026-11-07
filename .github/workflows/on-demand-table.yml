@@ -41,5 +41,4 @@ jobs:
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-          CUSTOMER_TARGETS_URL: ${{ secrets.CUSTOMER_TARGETS_URL }}
         run: python on_demand.py
