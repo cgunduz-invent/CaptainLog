@@ -121,6 +121,13 @@ Yiğitcan Aksoy <yigitcan.aksoy@invent.ai>,
 Yunus Akça <yunus.akca@invent.ai>
 """
 
+# Müşteri bazında log grafiği: hedefler + Jira proje eşleşmesi bir Google
+# Sheet'ten okunur (CSV olarak). Sütunlar (başlık adları büyük/küçük harf duyarsız):
+#   Müşteri | Jira Projeleri (virgül/; ile ayrılmış, örn. "LP2CS, LCS, LIWA") | Hedef (aylık saat)
+# URL boşsa grafik yine çizilir ama müşteri = proje anahtarı olur, hedef çizgisi olmaz.
+CUSTOMER_TARGETS_URL: str = os.environ.get("CUSTOMER_TARGETS_URL", "")
+CUSTOMER_CHART_MAX = 25       # grafikte en çok bu kadar müşteri (en çok log girilenler)
+
 # Şirkete özel ekstra kapalı günler (resmi tatil dışı), ISO tarih:
 EXTRA_OFF_DAYS: set[date] = set()
 # Örn: EXTRA_OFF_DAYS = {date(2026, 12, 31)}
@@ -288,6 +295,90 @@ def build_stats(worklogs: list[dict], allowed_ids: set[str] | None,
     return list(people.values())
 
 
+def project_of(w: dict) -> str:
+    """Worklog'un issue anahtarından proje anahtarı (LP2CS-251 -> LP2CS)."""
+    return (w.get("_issue_key") or "").split("-")[0] or "?"
+
+
+def build_customer_hours(worklogs: list[dict], allowed_ids: set[str] | None,
+                         start: date, end: date,
+                         proj_to_cust: dict[str, str]) -> dict[str, float]:
+    """Rapor ayı penceresinde (started) müşteri -> toplam saat.
+
+    Kişi tablosuyla aynı kapsam: sadece izlenen kişilerin worklog'ları.
+    Eşleşmeyen proje kendi anahtarıyla ayrı satır olur (sessizce düşmez).
+    """
+    out: dict[str, float] = {}
+    for w in worklogs:
+        aid = (w.get("author") or {}).get("accountId", "")
+        if allowed_ids is not None and aid not in allowed_ids:
+            continue
+        started = parse_jira_dt(w["started"]).astimezone(TZ).date()
+        if not (start <= started <= end):
+            continue
+        proj = project_of(w)
+        cust = proj_to_cust.get(proj.upper(), proj)
+        out[cust] = out.get(cust, 0.0) + int(w.get("timeSpentSeconds", 0)) / 3600.0
+    return out
+
+
+def predict_remaining(logged_h: float, wd_elapsed: int, wd_remaining: int) -> float:
+    """Kalan iş günlerinde girilmesi beklenen saat = log / geçen iş günü × kalan iş günü."""
+    if wd_elapsed <= 0 or wd_remaining <= 0:
+        return 0.0
+    return logged_h / wd_elapsed * wd_remaining
+
+
+def parse_customer_targets(csv_text: str) -> tuple[dict[str, str], dict[str, float]]:
+    """Sheet CSV'si -> (proje -> müşteri, müşteri -> aylık hedef saat)."""
+    import csv
+    import io
+    import re
+    rows = list(csv.reader(io.StringIO(csv_text)))
+    if not rows:
+        return {}, {}
+    head = [h.strip().lower() for h in rows[0]]
+
+    def col(*names):
+        for i, h in enumerate(head):
+            if any(n in h for n in names):
+                return i
+        raise RuntimeError(f"Hedef sheet'inde sütun bulunamadı: {names} (başlıklar: {rows[0]})")
+
+    ci = col("müşteri", "musteri", "customer", "client")
+    pi = col("proje", "project")
+    ti = col("hedef", "target")
+    proj_to_cust, targets = {}, {}
+    for r in rows[1:]:
+        if len(r) <= max(ci, pi, ti) or not r[ci].strip():
+            continue
+        cust = r[ci].strip()
+        for p in re.split(r"[,;/\s]+", r[pi]):
+            if p.strip():
+                proj_to_cust[p.strip().upper()] = cust
+        t = r[ti].strip().replace(" ", "").replace(",", ".")
+        try:
+            targets[cust] = float(t)
+        except ValueError:
+            pass                      # hedef boş/yazı -> hedef çizgisi çizilmez
+    return proj_to_cust, targets
+
+
+def load_customer_targets(url: str = CUSTOMER_TARGETS_URL
+                          ) -> tuple[dict[str, str], dict[str, float]]:
+    if not url:
+        print("[uyarı] CUSTOMER_TARGETS_URL boş; müşteri = Jira projesi, hedef yok.",
+              file=sys.stderr)
+        return {}, {}
+    r = requests.get(url, timeout=30)
+    r.raise_for_status()
+    if "text/html" in r.headers.get("Content-Type", ""):
+        raise RuntimeError("Hedef sheet'i CSV yerine HTML döndü: sheet herkese açık "
+                           "değil ya da URL CSV export linki değil.")
+    r.encoding = "utf-8"
+    return parse_customer_targets(r.text)
+
+
 def assign_expected(stats: list[PersonStats], expected_to_date_h: float):
     for p in stats:
         leave = LEAVE_HOURS_BY_ACCOUNT.get(p.account_id, 0.0)
@@ -445,6 +536,7 @@ def fetch_worklogs(fetch_since: datetime):
     for k in keys:
         for w in jira.issue_worklogs(k, since_ms):
             if parse_jira_dt(w["started"]).astimezone(TZ) >= fetch_since:
+                w["_issue_key"] = k            # müşteri grafiği için proje anahtarı
                 all_wl.append(w)
     print(f"[bilgi] {len(all_wl)} worklog toplandı.", file=sys.stderr)
     return all_wl, allowed_ids, roster, unresolved
@@ -620,6 +712,72 @@ def render_scatter(stats: list[PersonStats], today: date,
     return True
 
 
+# --------------------------------------------------------------------------- #
+# Müşteri bazında log grafiği (yatay bar)
+# --------------------------------------------------------------------------- #
+def render_customer_chart(cust_hours: dict[str, float], targets: dict[str, float],
+                          today: date, wd_elapsed: int, wd_full: int,
+                          report_month: int, path: str) -> bool:
+    """Her satır bir müşteri: log toplamı + kalan günler tahmini (iki bar),
+    aynı hizada aylık log hedefi (siyah çizgi). PNG kaydeder."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    # Log'u olan + hedefi olan tüm müşteriler (hedefi olup hiç log girilmeyen de görünsün)
+    names = set(cust_hours) | set(targets)
+    if not names:
+        return False
+    wd_remaining = max(0, wd_full - wd_elapsed)
+    rows = sorted(names, key=lambda c: -cust_hours.get(c, 0.0))[:CUSTOMER_CHART_MAX]
+    rows.reverse()                                   # en çok log en üstte
+
+    C_LOG, C_PRED, C_TGT = "#3b6fd6", "#e0a13b", "#222222"
+    h = 0.36
+    fig, ax = plt.subplots(figsize=(11.5, max(4.0, 0.62 * len(rows) + 1.8)), dpi=140)
+    xmax = 0.0
+    for i, c in enumerate(rows):
+        logged = cust_hours.get(c, 0.0)
+        pred = predict_remaining(logged, wd_elapsed, wd_remaining)
+        ax.barh(i + h / 2, logged, height=h, color=C_LOG, zorder=2)
+        ax.barh(i - h / 2, pred, height=h, color=C_PRED, zorder=2)
+        ax.text(logged, i + h / 2, f" {logged:.0f}s", va="center", fontsize=8, color="#333")
+        ax.text(pred, i - h / 2, f" {pred:.0f}s", va="center", fontsize=8, color="#333")
+        tgt = targets.get(c)
+        if tgt is not None:
+            ax.plot([tgt, tgt], [i - h - 0.04, i + h + 0.04], color=C_TGT, lw=2.4,
+                    solid_capstyle="butt", zorder=3)
+            ax.text(tgt, i + h + 0.06, f"{tgt:.0f}s", ha="center", va="bottom",
+                    fontsize=7.5, color=C_TGT)
+        xmax = max(xmax, logged, pred, tgt or 0.0)
+
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels(rows, fontsize=9.5)
+    ax.set_ylim(-0.7, len(rows) - 0.3)
+    ax.set_xlim(0, xmax * 1.12 + 1)
+    ax.set_xlabel("Saat", fontsize=10.5)
+    ax.grid(True, axis="x", alpha=0.25, zorder=0)
+    for s in ("top", "right"):
+        ax.spines[s].set_visible(False)
+    ax.set_title(f"Müşteri Bazında Log — {TR_MONTHS[report_month]} "
+                 f"({today.strftime('%d.%m.%Y')}, {wd_elapsed}/{wd_full} iş günü geçti, "
+                 f"{wd_remaining} kaldı)", fontsize=12.5, weight="bold", pad=12)
+    legend = [
+        Patch(color=C_LOG, label="Log toplamı"),
+        Patch(color=C_PRED, label=f"Tahmin: kalan {wd_remaining} iş günü "
+                                  "(log / geçen iş günü × kalan iş günü)"),
+        Line2D([0], [0], color=C_TGT, lw=2.4, label="Aylık log hedefi"),
+    ]
+    ax.legend(handles=legend, loc="upper center", ncol=3, fontsize=8.5,
+              frameon=False, bbox_to_anchor=(0.5, -0.07 if len(rows) > 6 else -0.12))
+    fig.tight_layout()
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    return True
+
+
 def upload_image_to_slack(path: str, title: str, comment: str,
                           thread_ts: str | None = None, channel: str | None = None):
     """Slack'e resim yükler (files.getUploadURLExternal akışı; files:write gerekir)."""
@@ -655,7 +813,7 @@ def upload_image_to_slack(path: str, title: str, comment: str,
     d = r.json()
     if not d.get("ok"):
         raise RuntimeError(f"Slack completeUpload hatası: {d}")
-    print("[bilgi] Scatter Slack'e gönderildi.", file=sys.stderr)
+    print(f"[bilgi] '{title}' Slack'e gönderildi.", file=sys.stderr)
 
 
 # --------------------------------------------------------------------------- #
@@ -750,11 +908,33 @@ def _selftest():
     print(f"  Önceki ay senaryosu OK (rapor ayı {TR_MONTHS[win2['month_start'].month]}, "
           f"{win2['wd_full']} iş günü).")
 
+    # --- Müşteri grafiği ---
+    csv_text = ("Müşteri,Jira Projeleri,Hedef (saat)\n"
+                "Liwa,\"LP2CS, LCS; LIWA\",\"120,5\"\n"
+                "Teknosa,TCS,80\n"
+                "Beymen,BCS,\n")                      # hedef boş -> çizgi yok
+    p2c, tg = parse_customer_targets(csv_text)
+    assert p2c == {"LP2CS": "Liwa", "LCS": "Liwa", "LIWA": "Liwa",
+                   "TCS": "Teknosa", "BCS": "Beymen"}, p2c
+    assert tg == {"Liwa": 120.5, "Teknosa": 80.0}, tg
+    cw = [dict(w, _issue_key=k) for w, k in zip(sample, ["LP2CS-1"] * 4 + ["LCS-2"] * 4
+                                                 + ["TCS-3", "XYZ-9"])]
+    ch = build_customer_hours(cw, {"a1", "e1"}, win["month_start"], win["mtd_cutoff"], p2c)
+    assert ch == {"Liwa": 64.0, "Teknosa": 8.0, "XYZ": 8.0}, ch   # eşleşmeyen proje kendi adıyla
+    # 8 iş günü geçti, 14 kaldı: 64 / 8 × 14 = 112
+    assert predict_remaining(64.0, 8, 14) == 112.0
+    assert predict_remaining(64.0, 0, 22) == 0.0 and predict_remaining(64.0, 22, 0) == 0.0
+    import tempfile
+    png = os.path.join(tempfile.gettempdir(), "selftest_customer_logs.png")
+    assert render_customer_chart(ch, tg, win["today"], win["wd_elapsed"], win["wd_full"],
+                                 win["month_start"].month, png)
+    print(f"  Müşteri grafiği OK ({png}).")
+
 
 def build_report(now: datetime | None = None):
     """Jira'dan o anki veriyi çekip tabloyu hesaplar.
 
-    Döner: (slack blokları, scatter png yolu, scatter var mı) ya da veri yoksa None.
+    Döner: (slack blokları, [(png yolu, başlık, yorum), ...]) ya da veri yoksa None.
     Hem zamanlanmış rapor hem de "give me updated table" isteği bunu kullanır.
     """
     win = compute_windows(now or datetime.now(TZ))
@@ -768,10 +948,27 @@ def build_report(now: datetime | None = None):
     blocks = build_slack_blocks(stats, win["today"], win["wd_elapsed"],
                                 win["wd_full"], win["month_start"].month,
                                 win["is_prev_month"], unresolved)
+    images = []
     scatter_path = os.path.join(os.getcwd(), "worklog_scatter.png")
-    has_scatter = render_scatter(stats, win["today"], win["wd_elapsed"],
-                                 win["wd_full"], scatter_path)
-    return blocks, scatter_path, has_scatter
+    if render_scatter(stats, win["today"], win["wd_elapsed"],
+                      win["wd_full"], scatter_path):
+        images.append((scatter_path, "Doluluk vs Giriş Gecikmesi",
+                       "Doluluk vs giriş gecikmesi dağılımı"))
+
+    # Müşteri grafiği: sheet okunamazsa rapor yine gider, sadece uyarı basılır
+    try:
+        proj_to_cust, targets = load_customer_targets()
+    except Exception as e:                                   # noqa: BLE001
+        print(f"[uyarı] Müşteri hedefleri okunamadı: {e}", file=sys.stderr)
+        proj_to_cust, targets = {}, {}
+    cust_hours = build_customer_hours(worklogs, allowed_ids, win["month_start"],
+                                      win["mtd_cutoff"], proj_to_cust)
+    cust_path = os.path.join(os.getcwd(), "customer_logs.png")
+    if render_customer_chart(cust_hours, targets, win["today"], win["wd_elapsed"],
+                             win["wd_full"], win["month_start"].month, cust_path):
+        images.append((cust_path, "Müşteri Bazında Log",
+                       "Müşteri bazında log toplamı, kalan günler tahmini ve hedef"))
+    return blocks, images
 
 
 def main():
@@ -785,20 +982,17 @@ def main():
     report = build_report()
     if report is None:
         return
-    blocks, scatter_path, has_scatter = report
+    blocks, images = report
 
     if "--dry-run" in args:
         print(json.dumps(blocks, ensure_ascii=False, indent=2))
-        if has_scatter:
-            print(f"\n[bilgi] Scatter kaydedildi: {scatter_path}", file=sys.stderr)
+        for path, title, _ in images:
+            print(f"\n[bilgi] {title} kaydedildi: {path}", file=sys.stderr)
     else:
         ts = post_to_slack(blocks)
-        if has_scatter:
-            upload_image_to_slack(
-                scatter_path,
-                title="Doluluk vs Giriş Gecikmesi",
-                comment="Doluluk vs giriş gecikmesi dağılımı",
-                thread_ts=ts)   # tabloyu takip eden thread'e ekle
+        for path, title, comment in images:
+            upload_image_to_slack(path, title=title, comment=comment,
+                                  thread_ts=ts)   # tabloyu takip eden thread'e ekle
 
 
 if __name__ == "__main__":

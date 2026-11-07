@@ -87,14 +87,13 @@ def reply_all(pending: list[tuple[str, dict]]):
                                "text": f"{who} rapor ayında worklog bulunamadı."}}],
                               channel=ch, thread_ts=m["ts"])
             continue
-        blocks, scatter_path, has_scatter = report
+        blocks, images = report
         note = {"type": "context", "elements": [{"type": "mrkdwn", "text": (
             f"🔄 {who} isteği üzerine *{stamp}* itibarıyla Jira'dan güncel çekildi "
             f"(doluluk düne kadar olan iş günlerine göre).")}]}
         rep.post_to_slack([note, *blocks], channel=ch, thread_ts=m["ts"])
-        if has_scatter:
-            rep.upload_image_to_slack(scatter_path, title="Doluluk vs Giriş Gecikmesi",
-                                      comment="Doluluk vs giriş gecikmesi dağılımı",
+        for path, title, comment in images:
+            rep.upload_image_to_slack(path, title=title, comment=comment,
                                       thread_ts=m["ts"], channel=ch)
         print(f"[bilgi] {ch} / {m['ts']} cevaplandı.", file=sys.stderr)
 

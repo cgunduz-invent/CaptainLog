@@ -54,6 +54,20 @@ Cron: `.github/workflows/worklog-quality.yml`. İki zamanlama:
 Not: GitHub Actions cron'u kuyruğa alır; mesaj 09:30 TR yerine birkaç
 dakika–15+ dk gecikmeli düşebilir (saat hesabı doğru, gecikme GitHub kaynaklı).
 
+## Müşteri bazında log grafiği
+Tablonun thread'ine scatter'ın yanında ikinci bir PNG gelir: her satır bir
+müşteri, iki yatay bar + hedef çizgisi.
+- **Log toplamı** (mavi): rapor ayında, izlenen kişilerin o müşterinin Jira
+  projelerine girdiği saat (doluluk ile aynı pencere).
+- **Tahmin** (turuncu): kalan iş günlerinde girilmesi beklenen saat =
+  log toplamı / geçen iş günü × kalan iş günü. Önceki ay gösterilirken 0.
+- **Hedef** (siyah çizgi): aylık log hedefi.
+- Müşteri ↔ proje eşleşmesi ve hedefler Google Sheet'ten okunur. Sütunlar:
+  `Müşteri | Jira Projeleri | Hedef` (örn. `Liwa | LP2CS, LCS, LIWA | 120`).
+  Sheet'in CSV export linki `CUSTOMER_TARGETS_URL` secret'ına konur. Sheet'te
+  olmayan proje kendi anahtarıyla, hedefsiz görünür. Sheet okunamazsa rapor
+  yine gider, sadece uyarı basılır.
+
 ## Anlık tablo: "give me updated table"
 İzlenen kanallardan birine (`C08DPFWG5PB`, `C07L0PF1X6E`) **give me updated
 table** yaz. Bot o anki rakamları Jira'dan taze çekip tabloyu + scatter'ı

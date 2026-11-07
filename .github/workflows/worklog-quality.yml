@@ -45,4 +45,5 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL: ${{ steps.chan.outputs.channel }}
+          CUSTOMER_TARGETS_URL: ${{ secrets.CUSTOMER_TARGETS_URL }}
         run: python worklog_quality_report.py
