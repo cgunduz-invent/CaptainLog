@@ -124,12 +124,14 @@ Yunus Akça <yunus.akca@invent.ai>
 # Müşteri bazında log grafiği: hedefler + Jira proje eşleşmesi repo içindeki
 # customer_targets.csv'den okunur (kaynak: "CX Hub Planning 2026_v2.xlsx" →
 # 2026_FTE_Target_v4 sayfası). Sütunlar:
-#   Müşteri | Jira Projeleri (boşluk/virgül ile ayrılmış) | Q1 | Q2 | Q3 | Q4  (aylık FTE)
-# Aylık hedef saat = rapor ayının çeyreğindeki FTE × FTE_MONTHLY_HOURS.
+#   Müşteri | Jira Projeleri (boşluk/virgül ile ayrılmış) | Q1 | Q2 | Q3 | Q4  (FTE)
+# FTE 5 günlük haftaya göre verilir (0.3 = haftada 0.3 gün). Aylık hedef saat =
+# FTE / FTE_WEEK_DAYS × rapor ayındaki iş günü × DAILY_TARGET_HOURS.
 CUSTOMER_TARGETS_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "customer_targets.csv")
-FTE_MONTHLY_HOURS = 40.0      # 1.0 FTE = ayda 40 saat log
-CUSTOMER_CHART_MAX = 25       # grafikte en çok bu kadar müşteri (en çok log girilenler)
+FTE_WEEK_DAYS = 5.0           # FTE değerinin ait olduğu hafta uzunluğu (iş günü)
+CUSTOMER_CHART_MAX = 25       # hedefsiz müşterilerden en çok bu kadarı (en çok log girilenler);
+                              # hedefi olan müşteriler her zaman grafikte
 
 # Şirkete özel ekstra kapalı günler (resmi tatil dışı), ISO tarih:
 EXTRA_OFF_DAYS: set[date] = set()
@@ -332,7 +334,12 @@ def predict_remaining(logged_h: float, wd_elapsed: int, wd_remaining: int) -> fl
     return logged_h / wd_elapsed * wd_remaining
 
 
-def parse_customer_targets(csv_text: str, month: int
+def fte_to_month_hours(fte: float, wd_full: int) -> float:
+    """FTE (5 günlük hafta) -> aylık hedef saat: FTE / 5 × ayın iş günü × 8."""
+    return fte / FTE_WEEK_DAYS * wd_full * DAILY_TARGET_HOURS
+
+
+def parse_customer_targets(csv_text: str, month: int, wd_full: int
                            ) -> tuple[dict[str, str], dict[str, float], list[str]]:
     """Hedef CSV'si -> (proje -> müşteri, müşteri -> aylık hedef saat,
     Jira projesi tanımsız müşteriler).
@@ -373,14 +380,15 @@ def parse_customer_targets(csv_text: str, month: int
             if fte > 0:
                 unmapped.append(cust)
             continue
-        targets[cust] = fte * FTE_MONTHLY_HOURS
+        if fte > 0:                   # 0 FTE = o çeyrek hedef yok
+            targets[cust] = fte_to_month_hours(fte, wd_full)
     return proj_to_cust, targets, unmapped
 
 
-def load_customer_targets(month: int, path: str = CUSTOMER_TARGETS_CSV
+def load_customer_targets(month: int, wd_full: int, path: str = CUSTOMER_TARGETS_CSV
                           ) -> tuple[dict[str, str], dict[str, float], list[str]]:
     with open(path, encoding="utf-8") as f:
-        return parse_customer_targets(f.read(), month)
+        return parse_customer_targets(f.read(), month, wd_full)
 
 
 def assign_expected(stats: list[PersonStats], expected_to_date_h: float):
@@ -723,45 +731,52 @@ def render_customer_chart(cust_hours: dict[str, float], targets: dict[str, float
                           today: date, wd_elapsed: int, wd_full: int,
                           report_month: int, path: str,
                           unmapped: list[str] | None = None) -> bool:
-    """Her satır bir müşteri: log toplamı + kalan günler tahmini (iki bar),
-    aynı hizada aylık log hedefi (siyah çizgi). PNG kaydeder."""
+    """Her satır bir müşteri: log toplamı (mavi) + üstüne yığılmış kalan günler
+    tahmini (turuncu) = ay sonu tahmini; aynı hizada aylık log hedefi (siyah
+    çizgi). PNG kaydeder."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
 
-    # Log'u olan + hedefi olan tüm müşteriler (hedefi olup hiç log girilmeyen de görünsün)
-    names = set(cust_hours) | set(targets)
+    # Hedefi olan müşteriler her zaman görünür (hiç log girilmese de); hedefsizlerden
+    # en çok log girilen CUSTOMER_CHART_MAX tanesi eklenir.
+    no_target = sorted((c for c in cust_hours if c not in targets),
+                       key=lambda c: -cust_hours[c])[:CUSTOMER_CHART_MAX]
+    names = set(targets) | set(no_target)
     if not names:
         return False
     wd_remaining = max(0, wd_full - wd_elapsed)
-    rows = sorted(names, key=lambda c: -cust_hours.get(c, 0.0))[:CUSTOMER_CHART_MAX]
+    rows = sorted(names, key=lambda c: -cust_hours.get(c, 0.0))
     rows.reverse()                                   # en çok log en üstte
 
     C_LOG, C_PRED, C_TGT = "#3b6fd6", "#e0a13b", "#222222"
-    h = 0.36
-    fig, ax = plt.subplots(figsize=(11.5, max(4.0, 0.62 * len(rows) + 1.8)), dpi=140)
+    h = 0.6
+    fig, ax = plt.subplots(figsize=(11.5, max(4.0, 0.42 * len(rows) + 1.8)), dpi=140)
     xmax = 0.0
     for i, c in enumerate(rows):
         logged = cust_hours.get(c, 0.0)
         pred = predict_remaining(logged, wd_elapsed, wd_remaining)
-        ax.barh(i + h / 2, logged, height=h, color=C_LOG, zorder=2)
-        ax.barh(i - h / 2, pred, height=h, color=C_PRED, zorder=2)
-        ax.text(logged, i + h / 2, f" {logged:.0f}s", va="center", fontsize=8, color="#333")
-        ax.text(pred, i - h / 2, f" {pred:.0f}s", va="center", fontsize=8, color="#333")
+        total = logged + pred
+        ax.barh(i, logged, height=h, color=C_LOG, zorder=2)
+        ax.barh(i, pred, left=logged, height=h, color=C_PRED, zorder=2)
         tgt = targets.get(c)
+        label = f" {logged:.0f}s" if pred <= 0 else f" {logged:.0f} + {pred:.0f} = {total:.0f}s"
+        if tgt:
+            label += f"  ({100.0 * total / tgt:.0f}% hedef)"
+        ax.text(total, i, label, va="center", fontsize=8, color="#333")
         if tgt is not None:
-            ax.plot([tgt, tgt], [i - h - 0.04, i + h + 0.04], color=C_TGT, lw=2.4,
+            ax.plot([tgt, tgt], [i - h / 2 - 0.08, i + h / 2 + 0.08], color=C_TGT, lw=2.4,
                     solid_capstyle="butt", zorder=3)
-            ax.text(tgt, i + h + 0.06, f"{tgt:.0f}s", ha="center", va="bottom",
-                    fontsize=7.5, color=C_TGT)
-        xmax = max(xmax, logged, pred, tgt or 0.0)
+            ax.text(tgt, i + h / 2 + 0.1, f"{tgt:.0f}s", ha="center", va="bottom",
+                    fontsize=7, color=C_TGT)
+        xmax = max(xmax, total, tgt or 0.0)
 
     ax.set_yticks(range(len(rows)))
     ax.set_yticklabels(rows, fontsize=9.5)
     ax.set_ylim(-0.7, len(rows) - 0.3)
-    ax.set_xlim(0, xmax * 1.12 + 1)
+    ax.set_xlim(0, xmax * 1.28 + 1)
     ax.set_xlabel("Saat", fontsize=10.5)
     ax.grid(True, axis="x", alpha=0.25, zorder=0)
     for s in ("top", "right"):
@@ -773,14 +788,18 @@ def render_customer_chart(cust_hours: dict[str, float], targets: dict[str, float
         Patch(color=C_LOG, label="Log toplamı"),
         Patch(color=C_PRED, label=f"Tahmin: kalan {wd_remaining} iş günü "
                                   "(log / geçen iş günü × kalan iş günü)"),
-        Line2D([0], [0], color=C_TGT, lw=2.4, label="Aylık log hedefi"),
+        Line2D([0], [0], color=C_TGT, lw=2.4,
+               label=f"Aylık hedef (FTE / {FTE_WEEK_DAYS:.0f} × {wd_full} iş günü × "
+                     f"{DAILY_TARGET_HOURS:.0f}s)"),
     ]
     ax.legend(handles=legend, loc="upper center", ncol=3, fontsize=8.5,
               frameon=False, bbox_to_anchor=(0.5, -0.07 if len(rows) > 6 else -0.12))
     fig.tight_layout()
     if unmapped:
-        fig.text(0.01, -0.02, "Jira projesi tanımsız (grafikte yok): " + ", ".join(unmapped),
-                 fontsize=7.5, color="#777", wrap=True)
+        import textwrap
+        note = textwrap.fill("Jira projesi tanımsız (grafikte yok): " + ", ".join(unmapped),
+                             width=170)
+        fig.text(0.01, -0.01, note, fontsize=7.5, color="#777", va="top")
     fig.savefig(path, bbox_inches="tight")
     plt.close(fig)
     return True
@@ -922,15 +941,17 @@ def _selftest():
                 "Teknosa,TCS,1.2,1.2,2.0,1.0\n"
                 "Beymen,BCS,,,,\n"                    # hedef boş -> çizgi yok
                 "CCC,,1.4,1.2,1.2,1.1\n")             # proje yok -> grafikte yok, dipnotta
-    p2c, tg, um = parse_customer_targets(csv_text, 9)  # Eylül = Q3
+    p2c, tg, um = parse_customer_targets(csv_text, 9, 20)  # Eylül = Q3, 20 iş günü
     assert p2c == {"LP2CS": "Liwa", "LCS": "Liwa", "LIWA": "Liwa",
                    "TCS": "Teknosa", "BCS": "Beymen"}, p2c
-    assert tg == {"Liwa": 60.0, "Teknosa": 80.0}, tg   # FTE × 40
+    assert tg == {"Liwa": 48.0, "Teknosa": 64.0}, tg   # FTE / 5 × 20 × 8
     assert um == ["CCC"], um
-    assert parse_customer_targets(csv_text, 11)[1] == {"Liwa": 20.0, "Teknosa": 40.0}  # Q4
+    assert parse_customer_targets(csv_text, 11, 20)[1] == {"Liwa": 16.0, "Teknosa": 32.0}  # Q4
+    # Kullanıcı örneği: 0.3 FTE, 21 iş günü -> 0.3 / 5 × 21 × 8 = 10.08s
+    assert abs(fte_to_month_hours(0.3, 21) - 10.08) < 1e-9
     # Repo'daki gerçek hedef dosyası okunabiliyor
-    rp2c, rtg, _ = load_customer_targets(11)
-    assert rp2c.get("LP2CS") == "Liwa (MDN)" and rtg.get("Liwa (MDN)") == 20.0, rtg
+    rp2c, rtg, _ = load_customer_targets(11, 20)
+    assert rp2c.get("LP2CS") == "Liwa (MDN)" and rtg.get("Liwa (MDN)") == 16.0, rtg
     cw = [dict(w, _issue_key=k) for w, k in zip(sample, ["LP2CS-1"] * 4 + ["LCS-2"] * 4
                                                  + ["TCS-3", "XYZ-9"])]
     ch = build_customer_hours(cw, {"a1", "e1"}, win["month_start"], win["mtd_cutoff"], p2c)
@@ -971,7 +992,8 @@ def build_report(now: datetime | None = None):
 
     # Müşteri grafiği: hedef dosyası okunamazsa rapor yine gider, sadece uyarı basılır
     try:
-        proj_to_cust, targets, unmapped = load_customer_targets(win["month_start"].month)
+        proj_to_cust, targets, unmapped = load_customer_targets(win["month_start"].month,
+                                                                win["wd_full"])
     except Exception as e:                                   # noqa: BLE001
         print(f"[uyarı] Müşteri hedefleri okunamadı: {e}", file=sys.stderr)
         proj_to_cust, targets, unmapped = {}, {}, []
