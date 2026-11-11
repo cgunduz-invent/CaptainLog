@@ -63,9 +63,9 @@ müşteri, yığılmış (stacked) yatay bar + hedef çizgisi. Barın sonunda
 - **Tahmin** (turuncu, mavinin üstüne yığılı): kalan iş günlerinde girilmesi
   beklenen saat = log toplamı / geçen iş günü × kalan iş günü. Önceki ay
   gösterilirken 0.
-- **Hedef** (siyah çizgi): aylık log hedefi = rapor ayının çeyreğindeki FTE /
-  5 × ayın iş günü × 8s (FTE 5 günlük haftaya göre; örn. 0.3 FTE, 21 iş
-  günlük ayda 0.3 / 5 × 21 × 8 = 10.1s). 0 FTE = hedef yok.
+- **Hedef** (siyah çizgi): aylık log hedefi = rapor ayının çeyreğindeki FTE ×
+  ayın iş günü × 8s (örn. 21 iş günlük ayda 1.0 FTE = 168s, 0.3 FTE = 50.4s).
+  0 FTE = hedef yok.
 - Hedefi olan müşteriler hiç log girilmese de her zaman grafikte görünür;
   hedefsiz projelerden en çok log girilen `CUSTOMER_CHART_MAX` (25) tanesi
   eklenir.
