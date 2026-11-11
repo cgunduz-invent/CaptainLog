@@ -56,13 +56,19 @@ dakika–15+ dk gecikmeli düşebilir (saat hesabı doğru, gecikme GitHub kayna
 
 ## Müşteri bazında log grafiği
 Tablonun thread'ine scatter'ın yanında ikinci bir PNG gelir: her satır bir
-müşteri, iki yatay bar + hedef çizgisi.
+müşteri, yığılmış (stacked) yatay bar + hedef çizgisi. Barın sonunda
+`log + tahmin = ay sonu tahmini` ve hedefe oranı (%) yazar.
 - **Log toplamı** (mavi): rapor ayında, izlenen kişilerin o müşterinin Jira
   projelerine girdiği saat (doluluk ile aynı pencere).
-- **Tahmin** (turuncu): kalan iş günlerinde girilmesi beklenen saat =
-  log toplamı / geçen iş günü × kalan iş günü. Önceki ay gösterilirken 0.
-- **Hedef** (siyah çizgi): aylık log hedefi = rapor ayının çeyreğindeki FTE ×
-  40s (`FTE_MONTHLY_HOURS`; 1.0 FTE = ayda 40 saat).
+- **Tahmin** (turuncu, mavinin üstüne yığılı): kalan iş günlerinde girilmesi
+  beklenen saat = log toplamı / geçen iş günü × kalan iş günü. Önceki ay
+  gösterilirken 0.
+- **Hedef** (siyah çizgi): aylık log hedefi = rapor ayının çeyreğindeki FTE /
+  5 × ayın iş günü × 8s (FTE 5 günlük haftaya göre; örn. 0.3 FTE, 21 iş
+  günlük ayda 0.3 / 5 × 21 × 8 = 10.1s). 0 FTE = hedef yok.
+- Hedefi olan müşteriler hiç log girilmese de her zaman grafikte görünür;
+  hedefsiz projelerden en çok log girilen `CUSTOMER_CHART_MAX` (25) tanesi
+  eklenir.
 - Hedefler ve müşteri ↔ Jira projesi eşleşmesi `customer_targets.csv`'de
   (kaynak: *CX Hub Planning 2026_v2.xlsx* → `2026_FTE_Target_v4`). Sütunlar:
   `Müşteri | Jira Projeleri | Q1 | Q2 | Q3 | Q4`. Hedefler değişince bu dosya
