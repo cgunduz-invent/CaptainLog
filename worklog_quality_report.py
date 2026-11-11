@@ -125,11 +125,10 @@ Yunus Akça <yunus.akca@invent.ai>
 # customer_targets.csv'den okunur (kaynak: "CX Hub Planning 2026_v2.xlsx" →
 # 2026_FTE_Target_v4 sayfası). Sütunlar:
 #   Müşteri | Jira Projeleri (boşluk/virgül ile ayrılmış) | Q1 | Q2 | Q3 | Q4  (FTE)
-# FTE 5 günlük haftaya göre verilir (0.3 = haftada 0.3 gün). Aylık hedef saat =
-# FTE / FTE_WEEK_DAYS × rapor ayındaki iş günü × DAILY_TARGET_HOURS.
+# Aylık hedef saat = FTE × rapor ayındaki iş günü × DAILY_TARGET_HOURS
+# (1.0 FTE = tam zamanlı bir kişinin o aydaki saati; 21 iş günü -> 168s).
 CUSTOMER_TARGETS_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "customer_targets.csv")
-FTE_WEEK_DAYS = 5.0           # FTE değerinin ait olduğu hafta uzunluğu (iş günü)
 CUSTOMER_CHART_MAX = 25       # hedefsiz müşterilerden en çok bu kadarı (en çok log girilenler);
                               # hedefi olan müşteriler her zaman grafikte
 
@@ -335,8 +334,8 @@ def predict_remaining(logged_h: float, wd_elapsed: int, wd_remaining: int) -> fl
 
 
 def fte_to_month_hours(fte: float, wd_full: int) -> float:
-    """FTE (5 günlük hafta) -> aylık hedef saat: FTE / 5 × ayın iş günü × 8."""
-    return fte / FTE_WEEK_DAYS * wd_full * DAILY_TARGET_HOURS
+    """FTE -> aylık hedef saat: FTE × ayın iş günü × 8."""
+    return fte * wd_full * DAILY_TARGET_HOURS
 
 
 def parse_customer_targets(csv_text: str, month: int, wd_full: int
@@ -765,7 +764,7 @@ def render_customer_chart(cust_hours: dict[str, float], targets: dict[str, float
         label = f" {logged:.0f}s" if pred <= 0 else f" {logged:.0f} + {pred:.0f} = {total:.0f}s"
         if tgt:
             label += f"  ({100.0 * total / tgt:.0f}% hedef)"
-        ax.text(total, i, label, va="center", fontsize=8, color="#333")
+        ax.text(max(total, tgt or 0.0), i, label, va="center", fontsize=8, color="#333")
         if tgt is not None:
             ax.plot([tgt, tgt], [i - h / 2 - 0.08, i + h / 2 + 0.08], color=C_TGT, lw=2.4,
                     solid_capstyle="butt", zorder=3)
@@ -789,8 +788,7 @@ def render_customer_chart(cust_hours: dict[str, float], targets: dict[str, float
         Patch(color=C_PRED, label=f"Tahmin: kalan {wd_remaining} iş günü "
                                   "(log / geçen iş günü × kalan iş günü)"),
         Line2D([0], [0], color=C_TGT, lw=2.4,
-               label=f"Aylık hedef (FTE / {FTE_WEEK_DAYS:.0f} × {wd_full} iş günü × "
-                     f"{DAILY_TARGET_HOURS:.0f}s)"),
+               label=f"Aylık hedef (FTE × {wd_full} iş günü × {DAILY_TARGET_HOURS:.0f}s)"),
     ]
     ax.legend(handles=legend, loc="upper center", ncol=3, fontsize=8.5,
               frameon=False, bbox_to_anchor=(0.5, -0.07 if len(rows) > 6 else -0.12))
@@ -944,14 +942,15 @@ def _selftest():
     p2c, tg, um = parse_customer_targets(csv_text, 9, 20)  # Eylül = Q3, 20 iş günü
     assert p2c == {"LP2CS": "Liwa", "LCS": "Liwa", "LIWA": "Liwa",
                    "TCS": "Teknosa", "BCS": "Beymen"}, p2c
-    assert tg == {"Liwa": 48.0, "Teknosa": 64.0}, tg   # FTE / 5 × 20 × 8
+    assert tg == {"Liwa": 240.0, "Teknosa": 320.0}, tg   # FTE × 20 × 8
     assert um == ["CCC"], um
-    assert parse_customer_targets(csv_text, 11, 20)[1] == {"Liwa": 16.0, "Teknosa": 32.0}  # Q4
-    # Kullanıcı örneği: 0.3 FTE, 21 iş günü -> 0.3 / 5 × 21 × 8 = 10.08s
-    assert abs(fte_to_month_hours(0.3, 21) - 10.08) < 1e-9
+    assert parse_customer_targets(csv_text, 11, 20)[1] == {"Liwa": 80.0, "Teknosa": 160.0}  # Q4
+    # 0.3 FTE, 21 iş günü -> 0.3 × 21 × 8 = 50.4s; 1.0 FTE -> 168s
+    assert abs(fte_to_month_hours(0.3, 21) - 50.4) < 1e-9
+    assert fte_to_month_hours(1.0, 21) == 168.0
     # Repo'daki gerçek hedef dosyası okunabiliyor
     rp2c, rtg, _ = load_customer_targets(11, 20)
-    assert rp2c.get("LP2CS") == "Liwa (MDN)" and rtg.get("Liwa (MDN)") == 16.0, rtg
+    assert rp2c.get("LP2CS") == "Liwa (MDN)" and rtg.get("Liwa (MDN)") == 80.0, rtg
     cw = [dict(w, _issue_key=k) for w, k in zip(sample, ["LP2CS-1"] * 4 + ["LCS-2"] * 4
                                                  + ["TCS-3", "XYZ-9"])]
     ch = build_customer_hours(cw, {"a1", "e1"}, win["month_start"], win["mtd_cutoff"], p2c)
