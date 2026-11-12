@@ -127,6 +127,10 @@ Yunus Akça <yunus.akca@invent.ai>
 #   Müşteri | Jira Projeleri (boşluk/virgül ile ayrılmış) | Q1 | Q2 | Q3 | Q4  (FTE)
 # Aylık hedef saat = FTE × rapor ayındaki iş günü × DAILY_TARGET_HOURS
 # (1.0 FTE = tam zamanlı bir kişinin o aydaki saati; 21 iş günü -> 168s).
+# Müşteri grafiğinde log, issue'nun "Related Project" alanındaki projeye sayılır
+# (SVCDEV/CX gibi iç projelerdeki iş, ilgili müşteriye gider); alan boşsa issue'nun
+# kendi projesi kullanılır.
+RELATED_PROJECT_FIELD = "customfield_11100"
 CUSTOMER_TARGETS_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "customer_targets.csv")
 CUSTOMER_CHART_MAX = 25       # hedefsiz müşterilerden en çok bu kadarı (en çok log girilenler);
@@ -300,7 +304,11 @@ def build_stats(worklogs: list[dict], allowed_ids: set[str] | None,
 
 
 def project_of(w: dict) -> str:
-    """Worklog'un issue anahtarından proje anahtarı (LP2CS-251 -> LP2CS)."""
+    """Worklog'un sayılacağı proje: issue'nun "Related Project" alanı doluysa o
+    (örn. SVCDEV-8105 -> FLOCS), boşsa issue anahtarının projesi (LP2CS-251 -> LP2CS)."""
+    rel = (w.get("_related_project") or "").strip()
+    if rel:
+        return rel
     return (w.get("_issue_key") or "").split("-")[0] or "?"
 
 
@@ -477,20 +485,24 @@ class Jira:
             start_at += data.get("maxResults", 50)
         return roster
 
-    def search_issue_keys(self, jql: str) -> list[str]:
-        keys, token = [], None
+    def search_issues(self, jql: str) -> list[tuple[str, str | None]]:
+        """JQL -> [(issue anahtarı, Related Project anahtarı ya da None)]."""
+        out, token = [], None
         while True:
-            body = {"jql": jql, "maxResults": 100, "fields": ["key"]}
+            body = {"jql": jql, "maxResults": 100,
+                    "fields": ["key", RELATED_PROJECT_FIELD]}
             if token:
                 body["nextPageToken"] = token
             r = self.s.post(f"{self.base}/rest/api/3/search/jql", json=body)
             r.raise_for_status()
             data = r.json()
-            keys += [i["key"] for i in data.get("issues", [])]
+            for i in data.get("issues", []):
+                rel = (i.get("fields") or {}).get(RELATED_PROJECT_FIELD)
+                out.append((i["key"], rel.get("key") if isinstance(rel, dict) else None))
             token = data.get("nextPageToken")
             if not token or data.get("isLast"):
                 break
-        return keys
+        return out
 
     def issue_worklogs(self, key: str, started_after_ms: int) -> list[dict]:
         out, start_at = [], 0
@@ -540,14 +552,17 @@ def fetch_worklogs(fetch_since: datetime):
     print(f"[bilgi] JQL: {jql}", file=sys.stderr)
 
     since_ms = int(fetch_since.timestamp() * 1000)
-    keys = jira.search_issue_keys(jql)
-    print(f"[bilgi] {len(keys)} issue, worklog'lar çekiliyor...", file=sys.stderr)
+    issues = jira.search_issues(jql)
+    n_rel = sum(1 for k, rel in issues if rel and rel != k.split("-")[0])
+    print(f"[bilgi] {len(issues)} issue ({n_rel} tanesi Related Project ile başka "
+          f"projeye sayılıyor), worklog'lar çekiliyor...", file=sys.stderr)
 
     all_wl = []
-    for k in keys:
+    for k, rel in issues:
         for w in jira.issue_worklogs(k, since_ms):
             if parse_jira_dt(w["started"]).astimezone(TZ) >= fetch_since:
                 w["_issue_key"] = k            # müşteri grafiği için proje anahtarı
+                w["_related_project"] = rel    # doluysa müşteri grafiğinde bu sayılır
                 all_wl.append(w)
     print(f"[bilgi] {len(all_wl)} worklog toplandı.", file=sys.stderr)
     return all_wl, allowed_ids, roster, unresolved
@@ -955,6 +970,13 @@ def _selftest():
                                                  + ["TCS-3", "XYZ-9"])]
     ch = build_customer_hours(cw, {"a1", "e1"}, win["month_start"], win["mtd_cutoff"], p2c)
     assert ch == {"Liwa": 64.0, "Teknosa": 8.0, "XYZ": 8.0}, ch   # eşleşmeyen proje kendi adıyla
+    # Related Project doluysa o sayılır (XYZ-9 -> TCS = Teknosa); boşsa issue'nun projesi
+    cw_rel = [dict(w, _related_project="TCS") if w["_issue_key"] == "XYZ-9" else w for w in cw]
+    ch_rel = build_customer_hours(cw_rel, {"a1", "e1"}, win["month_start"],
+                                  win["mtd_cutoff"], p2c)
+    assert ch_rel == {"Liwa": 64.0, "Teknosa": 16.0}, ch_rel
+    assert project_of({"_issue_key": "SVCDEV-1", "_related_project": None}) == "SVCDEV"
+    assert project_of({"_issue_key": "SVCDEV-1", "_related_project": "FLOCS"}) == "FLOCS"
     # 8 iş günü geçti, 14 kaldı: 64 / 8 × 14 = 112
     assert predict_remaining(64.0, 8, 14) == 112.0
     assert predict_remaining(64.0, 0, 22) == 0.0 and predict_remaining(64.0, 22, 0) == 0.0

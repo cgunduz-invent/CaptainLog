@@ -58,8 +58,11 @@ dakika–15+ dk gecikmeli düşebilir (saat hesabı doğru, gecikme GitHub kayna
 Tablonun thread'ine scatter'ın yanında ikinci bir PNG gelir: her satır bir
 müşteri, yığılmış (stacked) yatay bar + hedef çizgisi. Barın sonunda
 `log + tahmin = ay sonu tahmini` ve hedefe oranı (%) yazar.
-- **Log toplamı** (mavi): rapor ayında, izlenen kişilerin o müşterinin Jira
-  projelerine girdiği saat (doluluk ile aynı pencere).
+- **Log toplamı** (mavi): rapor ayında, izlenen kişilerin o müşteriye girdiği
+  saat (doluluk ile aynı pencere). Log, issue'nun **Related Project**
+  (`customfield_11100`) alanındaki projeye sayılır; böylece SVCDEV/CX gibi iç
+  projelerde müşteri için yapılan iş o müşteriye gider (örn. SVCDEV-8105 →
+  FLOCS). Alan boşsa issue'nun kendi projesi kullanılır.
 - **Tahmin** (turuncu, mavinin üstüne yığılı): kalan iş günlerinde girilmesi
   beklenen saat = log toplamı / geçen iş günü × kalan iş günü. Önceki ay
   gösterilirken 0.
