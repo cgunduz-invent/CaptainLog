@@ -133,8 +133,8 @@ Yunus Akça <yunus.akca@invent.ai>
 RELATED_PROJECT_FIELD = "customfield_11100"
 CUSTOMER_TARGETS_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "customer_targets.csv")
-CUSTOMER_CHART_MAX = 25       # hedefsiz müşterilerden en çok bu kadarı (en çok log girilenler);
-                              # hedefi olan müşteriler her zaman grafikte
+CUSTOMER_CHART_MAX = 0        # hedefsiz müşterilerden en çok bu kadarı (en çok log girilenler);
+                              # 0 = grafikte sadece hedefi olan müşteriler var
 
 # Şirkete özel ekstra kapalı günler (resmi tatil dışı), ISO tarih:
 EXTRA_OFF_DAYS: set[date] = set()
