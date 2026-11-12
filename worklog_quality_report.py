@@ -651,6 +651,13 @@ def build_slack_blocks(stats: list[PersonStats], today: date,
 
 def post_to_slack(blocks: list[dict], channel: str | None = None,
                   thread_ts: str | None = None) -> str | None:
+    return post_message(blocks, channel, thread_ts).get("ts")
+
+
+def post_message(blocks: list[dict], channel: str | None = None,
+                 thread_ts: str | None = None) -> dict:
+    """chat.postMessage; Slack yanıtını döner. Kanal yerine kullanıcı ID'si (U...)
+    verilirse bot DM atar; yanıttaki "channel" o DM'in gerçek ID'sidir (D...)."""
     payload = {"channel": channel or os.environ["SLACK_CHANNEL"], "blocks": blocks,
                "text": "Worklog takip raporu"}
     if thread_ts:
@@ -663,7 +670,7 @@ def post_to_slack(blocks: list[dict], channel: str | None = None,
     if not data.get("ok"):
         raise RuntimeError(f"Slack hatası: {data}")
     print("[bilgi] Tablo Slack'e gönderildi.", file=sys.stderr)
-    return data.get("ts")
+    return data
 
 
 # --------------------------------------------------------------------------- #
@@ -1047,10 +1054,12 @@ def main():
         for path, title, _ in images:
             print(f"\n[bilgi] {title} kaydedildi: {path}", file=sys.stderr)
     else:
-        ts = post_to_slack(blocks)
+        msg = post_message(blocks)
         for path, title, comment in images:
+            # tabloyu takip eden thread'e ekle; kanal yanıttan alınır ki
+            # SLACK_CHANNEL kullanıcı ID'si (DM) olduğunda da çalışsın
             upload_image_to_slack(path, title=title, comment=comment,
-                                  thread_ts=ts)   # tabloyu takip eden thread'e ekle
+                                  thread_ts=msg.get("ts"), channel=msg.get("channel"))
 
 
 if __name__ == "__main__":
