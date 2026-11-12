@@ -2,7 +2,7 @@ Müşteri,Jira Projeleri,Q1,Q2,Q3,Q4
 Hugo Boss,HBCS HBACS,1.2,1.2,1.2,1.0
 Alfamart,ALCS,0.9,0.9,0.9,0.7
 CCC,CLIEN,1.4,1.2,1.2,1.1
-Apparel Group,,0.5,0.5,0.5,0.3
+Apparel Group,ATCS,0.5,0.5,0.5,0.3
 Migros,MIGCS,0.7,0.7,0.7,0.6
 Otcf,OCS,1.0,1.0,0.8,0.0
 Liwa (Inventory),LCS LIWA,0.7,0.7,0.7,0.4
@@ -14,7 +14,7 @@ Mavi (MDN),MMCS,0.6,0.6,0.6,0.3
 Gratis,GCS,0.8,1.0,1.0,1.0
 Alfuttaim,ACS,0.75,0.75,0.75,0.6
 Footasylum,FOOTCS,0.75,0.75,0.75,0.4
-Fiba,,0.5,0.5,0.5,0.5
+Fiba,FRCS,0.5,0.5,0.5,0.5
 Toypa + Noriel,TOYPACS NORIELCS,0.35,0.35,0.35,0.2
 Mey Diageo,MEYD,0.2,0.2,0.2,0.2
 D&R,DRCS,0.4,0.4,0.4,0.4
