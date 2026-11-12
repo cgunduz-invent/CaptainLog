@@ -69,9 +69,9 @@ müşteri, yığılmış (stacked) yatay bar + hedef çizgisi. Barın sonunda
 - **Hedef** (siyah çizgi): aylık log hedefi = rapor ayının çeyreğindeki FTE ×
   ayın iş günü × 8s (örn. 21 iş günlük ayda 1.0 FTE = 168s, 0.3 FTE = 50.4s).
   0 FTE = hedef yok.
-- Hedefi olan müşteriler hiç log girilmese de her zaman grafikte görünür;
-  hedefsiz projelerden en çok log girilen `CUSTOMER_CHART_MAX` (25) tanesi
-  eklenir.
+- Grafikte sadece hedefi olan müşteriler görünür (hiç log girilmese de).
+  Hedefsiz projeler `CUSTOMER_CHART_MAX = 0` ile dışarıda; bu sayı artırılırsa
+  hedefsizlerden en çok log girilen o kadarı eklenir.
 - Hedefler ve müşteri ↔ Jira projesi eşleşmesi `customer_targets.csv`'de
   (kaynak: *CX Hub Planning 2026_v2.xlsx* → `2026_FTE_Target_v4`). Sütunlar:
   `Müşteri | Jira Projeleri | Q1 | Q2 | Q3 | Q4`. Hedefler değişince bu dosya
