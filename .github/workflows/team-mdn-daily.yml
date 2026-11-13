@@ -1,0 +1,39 @@
+name: team-mdn-cx günlük müşteri logu
+
+on:
+  schedule:
+    # Hafta içi her gün 06:30 UTC = 09:30 TR.
+    - cron: "30 6 * * 1-5"
+  workflow_dispatch:        # elle tetikleme (test için)
+    inputs:
+      channel:
+        description: "Hedef Slack kanal ID (boşsa TEAM_MDN_CX_CHANNEL değişkeni)"
+        required: false
+        default: ""
+
+jobs:
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Bağımlılıklar
+        run: pip install -r requirements.txt
+
+      - name: Müşteri grafiğini team-mdn-cx'e bas
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          # Kanal ID: repo Settings → Variables → TEAM_MDN_CX_CHANNEL
+          SLACK_CHANNEL: ${{ github.event.inputs.channel || vars.TEAM_MDN_CX_CHANNEL }}
+        run: |
+          if [ -z "$SLACK_CHANNEL" ]; then
+            echo "TEAM_MDN_CX_CHANNEL repo değişkeni tanımlı değil." >&2; exit 1
+          fi
+          python worklog_quality_report.py --team-mdn

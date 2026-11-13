@@ -136,6 +136,13 @@ CUSTOMER_TARGETS_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 CUSTOMER_CHART_MAX = 0        # hedefsiz müşterilerden en çok bu kadarı (en çok log girilenler);
                               # 0 = grafikte sadece hedefi olan müşteriler var
 
+# Günlük ekip grafiği (--team-mdn): sadece müşteri grafiği, sadece bu müşteriler.
+# İsimler customer_targets.csv'deki "Müşteri" sütunuyla birebir aynı olmalı.
+TEAM_MDN_CUSTOMERS: list[str] = [
+    "Teknosa", "Beymen2025", "Liwa (MDN)", "D&R", "FA MDN", "Mavi (MDN)",
+    "Apparel Group", "Toypa + Noriel", "Ipekyol (MDN)", "Ipekyol (Inventory)",
+]
+
 # Şirkete özel ekstra kapalı günler (resmi tatil dışı), ISO tarih:
 EXTRA_OFF_DAYS: set[date] = set()
 # Örn: EXTRA_OFF_DAYS = {date(2026, 12, 31)}
@@ -744,7 +751,8 @@ def render_scatter(stats: list[PersonStats], today: date,
 def render_customer_chart(cust_hours: dict[str, float], targets: dict[str, float],
                           today: date, wd_elapsed: int, wd_full: int,
                           report_month: int, path: str,
-                          unmapped: list[str] | None = None) -> bool:
+                          unmapped: list[str] | None = None,
+                          title_prefix: str = "Müşteri Bazında Log") -> bool:
     """Her satır bir müşteri: log toplamı (mavi) + üstüne yığılmış kalan günler
     tahmini (turuncu) = ay sonu tahmini; aynı hizada aylık log hedefi (siyah
     çizgi). PNG kaydeder."""
@@ -795,7 +803,7 @@ def render_customer_chart(cust_hours: dict[str, float], targets: dict[str, float
     ax.grid(True, axis="x", alpha=0.25, zorder=0)
     for s in ("top", "right"):
         ax.spines[s].set_visible(False)
-    ax.set_title(f"Müşteri Bazında Log — {TR_MONTHS[report_month]} "
+    ax.set_title(f"{title_prefix} — {TR_MONTHS[report_month]} "
                  f"({today.strftime('%d.%m.%Y')}, {wd_elapsed}/{wd_full} iş günü geçti, "
                  f"{wd_remaining} kaldı)", fontsize=12.5, weight="bold", pad=12)
     legend = [
@@ -986,6 +994,18 @@ def _selftest():
                                  win["month_start"].month, png, um)
     print(f"  Müşteri grafiği OK ({png}).")
 
+    # --- Ekip grafiği filtresi: listedeki müşteriler kalır, log girilmese de görünür ---
+    tch, ttg, missing = filter_customers({"Liwa": 64.0, "XYZ": 8.0}, tg, ["Liwa", "Teknosa", "Yok"])
+    assert tch == {"Liwa": 64.0} and ttg == tg and missing == ["Yok"], (tch, ttg, missing)
+    # Gerçek CSV'de ekip listesindeki her müşterinin Q4 hedefi var
+    _, rtg4, _ = load_customer_targets(11, 20)
+    assert not [c for c in TEAM_MDN_CUSTOMERS if c not in rtg4], rtg4
+    png2 = os.path.join(tempfile.gettempdir(), "selftest_team_mdn.png")
+    assert render_customer_chart(tch, ttg, win["today"], win["wd_elapsed"], win["wd_full"],
+                                 win["month_start"].month, png2,
+                                 title_prefix="team-mdn-cx Müşteri Logu")
+    print(f"  Ekip grafiği OK ({png2}).")
+
 
 def build_report(now: datetime | None = None):
     """Jira'dan o anki veriyi çekip tabloyu hesaplar.
@@ -1029,6 +1049,38 @@ def build_report(now: datetime | None = None):
     return blocks, images
 
 
+def filter_customers(cust_hours: dict[str, float], targets: dict[str, float],
+                     customers: list[str]
+                     ) -> tuple[dict[str, float], dict[str, float], list[str]]:
+    """Grafiği verilen müşteri listesine daraltır. Döner: (saatler, hedefler,
+    hedef CSV'sinde bu çeyrek hedefi bulunmayan müşteriler)."""
+    keep = set(customers)
+    hours = {c: h for c, h in cust_hours.items() if c in keep}
+    tg = {c: t for c, t in targets.items() if c in keep}
+    missing = [c for c in customers if c not in tg]
+    return hours, tg, missing
+
+
+def build_team_chart(customers: list[str], title_prefix: str,
+                     now: datetime | None = None) -> str | None:
+    """Sadece müşteri grafiği, sadece verilen müşteriler. PNG yolunu döner."""
+    win = compute_windows(now or datetime.now(TZ))
+    worklogs, allowed_ids, _, _ = fetch_worklogs(win["fetch_since"])
+    proj_to_cust, targets, _ = load_customer_targets(win["month_start"].month, win["wd_full"])
+    cust_hours = build_customer_hours(worklogs, allowed_ids, win["month_start"],
+                                      win["mtd_cutoff"], proj_to_cust)
+    hours, tg, missing = filter_customers(cust_hours, targets, customers)
+    if missing:
+        print(f"[uyarı] Hedefi bulunamayan müşteriler (grafikte yok): {missing}",
+              file=sys.stderr)
+    path = os.path.join(os.getcwd(), "team_customer_logs.png")
+    if not render_customer_chart(hours, tg, win["today"], win["wd_elapsed"], win["wd_full"],
+                                 win["month_start"].month, path,
+                                 unmapped=missing or None, title_prefix=title_prefix):
+        return None
+    return path
+
+
 def main():
     args = sys.argv[1:]
     if "--selftest" in args:
@@ -1036,6 +1088,19 @@ def main():
         return
     if requests is None:
         sys.exit("requests kurulu değil: pip install -r requirements.txt")
+
+    if "--team-mdn" in args:
+        # Günlük ekip mesajı: sadece müşteri grafiği, kanala ana mesaj olarak.
+        path = build_team_chart(TEAM_MDN_CUSTOMERS, "team-mdn-cx Müşteri Logu")
+        if path is None:
+            return
+        if "--dry-run" in args:
+            print(f"[bilgi] Ekip grafiği kaydedildi: {path}", file=sys.stderr)
+        else:
+            upload_image_to_slack(path, title="team-mdn-cx Müşteri Logu",
+                                  comment="Günlük müşteri log özeti (log + kalan günler "
+                                          "tahmini vs aylık FTE hedefi)")
+        return
 
     report = build_report()
     if report is None:
