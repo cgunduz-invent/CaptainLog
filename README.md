@@ -80,6 +80,16 @@ müşteri, yığılmış (stacked) yatay bar + hedef çizgisi. Barın sonunda
   boş bırakılan müşteri grafiğe girmez, altta "Jira projesi tanımsız"
   notunda listelenir.
 
+## Günlük ekip grafiği: team-mdn-cx
+Hafta içi her gün 09:30 TR'de `team-mdn-cx` kanalına **sadece müşteri log
+grafiği** ana mesaj olarak gider (kişi tablosu ve scatter yok).
+- Müşteriler: `TEAM_MDN_CUSTOMERS` (`worklog_quality_report.py`); isimler
+  `customer_targets.csv`'deki "Müşteri" sütunuyla birebir aynı olmalı.
+- Hesap ana grafikle aynı (izlenen kişiler, Related Project, FTE hedefi).
+- Workflow: `.github/workflows/team-mdn-daily.yml`. Kanal ID repo değişkeni
+  `TEAM_MDN_CX_CHANNEL`'dan okunur; botu kanala ekle.
+- Elle: `python worklog_quality_report.py --team-mdn [--dry-run]`
+
 ## Anlık tablo: "give me updated table"
 İzlenen kanallardan birine (`C08DPFWG5PB`, `C07L0PF1X6E`) **give me updated
 table** yaz. Bot o anki rakamları Jira'dan taze çekip tabloyu + scatter'ı
